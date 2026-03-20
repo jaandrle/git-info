@@ -1,0 +1,132 @@
+#!/bin/env bash
+
+# --- Theme Configuration ---
+COLOR_ACCENT='\033[33m'	# Orange
+COLOR_BRANCH='\033[34m'	# Blue
+COLOR_STRONG='\033[1m'	# Bold
+COLOR_OK='\033[32m'		# Green
+COLOR_KO='\033[31m'		# Red
+COLOR_NOTE='\033[37;2m'	# GRAY
+
+SEP='┊'
+
+# --- Internal ---
+COLOR_RESET='\033[0m'
+COLOR_DIM='\033[2m'
+
+# --- Formatting Helpers ---
+fmt_hash() { # Formats a 7-char hash with a 4/3 color split
+	local hash=$1
+	# First 4 chars in accent color, last 3 dimmed 
+	echo -ne "${COLOR_ACCENT}${hash:0:4}${COLOR_DIM}${hash:4:3}${COLOR_RESET}"
+}
+render_header() { # Renders consistent branch/section headers
+	local type=$1
+	local label=$2
+	case "$type" in
+		"unstaged") echo -e "${COLOR_NOTE}╭┄ [$label]${COLOR_RESET}" ;;
+		"staged") echo -e "${COLOR_NOTE}├┄ [$label]${COLOR_RESET}" ;;
+		"branch")   echo -e "${SEP}${COLOR_NOTE}╭┄ [${COLOR_STRONG}${COLOR_BRANCH}${label}${COLOR_RESET}${COLOR_NOTE}]${COLOR_RESET}" ;;
+		"stacked")  echo -e "${SEP}${COLOR_NOTE}├┄ [${COLOR_STRONG}${COLOR_BRANCH}${label}${COLOR_RESET}${COLOR_NOTE}]${COLOR_RESET}" ;;
+	esac
+}
+get_dot() { # Checks remote status for the commit dot 
+	if git branch -r --contains "$1" 2>/dev/null | grep -q "origin/"; then
+		echo -e "${COLOR_OK}●${COLOR_RESET}"
+	else
+		echo -e "${COLOR_RESET}●${COLOR_RESET}"
+	fi
+}
+
+main() {
+	if [[ "$1" == "help" ]]; then
+		echo "Git status inspired GitButtler cli."
+		echo "Usage: git s"
+		exit 0
+	fi
+	# 1. Unstaged changes section 
+	render_header "unstaged" "unstaged changes"
+
+	staget=$(git diff --cached --name-status)
+	git status --short --no-branch | while read -r line; do
+		STAT=$(echo "$line" | awk '{print $1}')
+		FILE=$(echo "$line" | awk '{print $2}')
+
+		for sline in $staget; do
+			if [ "$FILE" == "$sline" ]; then
+				continue 2
+			fi
+		done
+
+		if [[ "$STAT" == "??" || "$STAT" == "A" ]]; then
+			LAST_HASH="${COLOR_NOTE}new file${COLOR_RESET}"
+			STAT="A"
+			COLOR=$COLOR_OK
+		else
+			# Fetch and format the last hash to touch this file 
+			RAW_HASH=$(git log -1 --format="%h" -- "$FILE")
+			LAST_HASH=$(fmt_hash "$RAW_HASH")
+			case "$STAT" in
+				"M") COLOR=$COLOR_ACCENT ;;
+				"D") COLOR=$COLOR_KO    ;;
+				*)   COLOR=$COLOR_ACCENT ;;
+			esac
+		fi
+
+		# Aligned output: Status | File | Spacer | Last Hash
+		printf "${SEP}   ${COLOR}%s${COLOR_RESET} %s ${COLOR_NOTE}…${COLOR_RESET} %b\n" "$STAT" "$FILE" "$LAST_HASH"
+	done
+	echo -e "$SEP"
+
+	if [ -n "$staget" ]; then
+		render_header "staged" "staged changes"
+		while read -r line; do
+			STAT=$(echo "$line" | awk '{print $1}')
+			FILE=$(echo "$line" | awk '{print $2}')
+			printf "${SEP}   ${COLOR_OK}%s${COLOR_RESET} %s\n" "$STAT" "$FILE"
+		done <<< "$staget"
+		echo -e "$SEP"
+	fi
+
+	# 2. Dynamic Commit Groups 
+	CURRENT_GROUP=$(git rev-parse --abbrev-ref HEAD)
+	render_header "branch" "$CURRENT_GROUP"
+	TARGET_HASH=""
+
+	while IFS='|' read -r HASH REFS MSG AUTHT AUTHU; do
+		if [[ -n "$REFS" ]]; then
+			# Clean refs: remove HEAD pointers and tag prefixes 
+			CLEAN_REFS=$(echo "$REFS" | sed 's/HEAD -> //g; s/tag: //g')
+
+			# Detect if we hit the target/upstream branch 
+			if echo "$CLEAN_REFS" | grep -qE "(origin/main|origin/master)"; then
+				TARGET_HASH="$HASH"
+				TARGET_REF=$(echo "$CLEAN_REFS" | tr ',' '\n' | sed 's/^ *//' | grep -E "^(origin/main|origin/master)$" | head -n 1)
+				break
+			fi
+
+			# Detect a new local branch label (Stacked branches) 
+			NEW_GROUP=$(echo "$CLEAN_REFS" | tr ',' '\n' | sed 's/^ *//' | grep -vE 'origin/|gitbutler/' | head -n 1)
+			if [[ -n "$NEW_GROUP" && "$NEW_GROUP" != "$CURRENT_GROUP" ]]; then
+				CURRENT_GROUP="$NEW_GROUP"
+				echo -e "${SEP}${COLOR_NOTE}│${COLOR_RESET}"
+				render_header "stacked" "$CURRENT_GROUP"
+			fi
+		fi
+
+		echo -e "${SEP}$(get_dot "$HASH")   $(fmt_hash "$HASH") $MSG $COLOR_NOTE($AUTHT · $AUTHU)${COLOR_RESET}"
+	done < <(git log --format="%h|%D|%s|%ar|%an" HEAD)
+
+	# 3. Footer Section 
+	[[ -z "$TARGET_HASH" ]] && TARGET_HASH=$(git rev-parse --short HEAD) && TARGET_REF="unknown"
+
+	F_DATE=$(git show -s --format='%as' "$TARGET_HASH")
+	F_MSG=$(git show -s --format='%s' "$TARGET_HASH")
+
+	echo -e "${COLOR_NOTE}├╯${COLOR_RESET}\n$SEP"
+	echo -e "┴ $(fmt_hash "$TARGET_HASH") ${COLOR_STRONG}[${COLOR_BRANCH}${TARGET_REF}${COLOR_RESET}${COLOR_STRONG}]${COLOR_RESET} ${COLOR_DIM}${F_DATE}${COLOR_RESET} ${COLOR_DIM}${F_MSG}${COLOR_RESET}"
+	# white dim
+	echo -e "\n\e[37m${COLOR_NOTE}Hint: run \`git diff\` to see changes or \`git add\` to stage${COLOR_RESET}"
+}
+
+main "$@"
