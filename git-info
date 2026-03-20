@@ -13,17 +13,17 @@ readonly COLOR_NOTE='\033[37;2m'  # GRAY
 readonly SEP='┊'
 
 # --- Internal ---
+readonly VERSION="1.0.0"
 readonly COLOR_RESET='\033[0m'
 readonly COLOR_DIM='\033[2m'
 
-# --- Formatting Helpers ---
-fmt_hash() { # Formats a 7-char hash with a 4/3 color split
+# --- Functions ---
+fmt_hash() { # formats a 7-char hash with a 4/3 color split
 	local hash="$1"
 	# First 4 chars in accent color, last 3 dimmed 
 	echo -ne "${COLOR_ACCENT}${hash:0:4}${COLOR_DIM}${hash:4:3}${COLOR_RESET}"
 }
-
-render_header() { # Renders consistent branch/section headers
+render_header() { # branch/section headers
 	local type="$1"
 	local label="$2"
 	case "$type" in
@@ -33,16 +33,14 @@ render_header() { # Renders consistent branch/section headers
 		"stacked")  echo -e "${SEP}${COLOR_NOTE}├┄ [${COLOR_STRONG}${COLOR_BRANCH}${label}${COLOR_RESET}${COLOR_NOTE}]${COLOR_RESET}" ;;
 	esac
 }
-
-get_dot() { # Checks remote status for the commit dot 
-	local hash="$1"
-	if git branch -r --contains "$hash" 2>/dev/null | grep -q "origin/"; then
+echo_remote_status() { # Checks remote status for the commit dot 
+	local status="${1:-}" # 1 = on remote, 0 = not on remote
+	if [[ "$status" == "1" ]]; then
 		echo -e "${COLOR_OK}●${COLOR_RESET}"
 	else
-		echo -e "${COLOR_RESET}●${COLOR_RESET}"
+		echo -e "${COLOR_RESET}◐${COLOR_RESET}"
 	fi
 }
-
 get_in_progress() { # Detects rebase/merge/cherry-pick/revert in progress and outputs operation type
 	local state_dir=""
 	local operation=""
@@ -66,8 +64,7 @@ get_in_progress() { # Detects rebase/merge/cherry-pick/revert in progress and ou
 
 	echo "$operation"
 }
-
-render_in_progress() { # Renders rebase/merge/cherry-pick/revert in progress
+echo_in_progress() { # Renders rebase/merge/cherry-pick/revert in progress
 	local state_dir=""
 	local operation=""
 	local step=""
@@ -113,7 +110,6 @@ render_in_progress() { # Renders rebase/merge/cherry-pick/revert in progress
 		fi
 	fi
 }
-
 get_default_branch() { # Detects the default branch from remote
 	local default_branch=""
 	local remote="origin"
@@ -147,9 +143,31 @@ get_default_branch() { # Detects the default branch from remote
 }
 
 main() {
-	if [[ "${1:-}" == "help" ]]; then
-		echo "Git status inspired GitButtler cli."
-		echo "Usage: git s"
+	if [[ "${1:-}" == "--version" ]]; then
+		echo "$VERSION"
+		exit 0
+	fi
+	if [[ "${1:-}" == "help" ]] || [[ "${1:-}" == "--help" ]]; then
+		echo "Git status inspired by GitButler CLI."
+		echo ""
+		echo "Usage:"
+		echo "  git-info          Show git status"
+		echo "  git-info help     Show this help message"
+		echo "  git-info --help   Show this help message"
+		echo ""
+		echo "Description:"
+		echo "  A colorful and informative Git status tool that displays unstaged changes,"
+		echo "  staged changes, commit history, and branch information."
+		echo ""
+		echo "UI Elements:"
+		echo "  ╭┄ [section]      Section headers"
+		echo "  ┊                Vertical separator line"
+		echo "  ●                Commit on remote (green)"
+		echo "  ◐                Commit not on remote yet (gray)"
+		echo "  ! operation      In-progress Git operation"
+		echo "  M/A/D            File status (Modified/Added/Deleted)"
+		echo "  ┴ hash [branch]  Footer with target branch info"
+		echo "  Hint:            Contextual hint"
 		exit 0
 	fi
 	
@@ -177,7 +195,7 @@ main() {
 	
 	# 0. Check for in-progress operations
 	local IN_PROGRESS
-	IN_PROGRESS=$(render_in_progress)
+	IN_PROGRESS=$(echo_in_progress)
 	if [[ -n "$IN_PROGRESS" ]]; then
 		echo -e "${IN_PROGRESS}"
 		echo -e "${SEP}"
@@ -297,12 +315,7 @@ main() {
 		fi
 
 		local DOT
-		if [[ "${branch_contains_cache[$HASH]:-}" == "1" ]]; then
-			DOT="${COLOR_OK}●${COLOR_RESET}"
-		else
-			DOT="${COLOR_RESET}●${COLOR_RESET}"
-		fi
-
+		DOT=$(echo_remote_status "${branch_contains_cache[$HASH]:-}")
 		echo -e "${SEP}$DOT   $(fmt_hash "$HASH") $MSG $COLOR_NOTE($AUTHT · $AUTHU)${COLOR_RESET}"
 	done < <(git log --format="%h|%D|%s|%ar|%an" HEAD 2>/dev/null || true)
 	
@@ -362,6 +375,5 @@ main() {
 	echo -e "\n\e[37m${COLOR_NOTE}Hint: ${HINT}${COLOR_RESET}"
 }
 
+# --- Execution ---
 main "$@"
-# test modification
-# test
