@@ -80,6 +80,15 @@ main() {
 	local DEFAULT_BRANCH
 	DEFAULT_BRANCH=$(get_default_branch)
 	
+	# Pre-fetch numstat for all files to avoid multiple git diff calls
+	local numstat_cache
+	declare -A numstat_cache
+	while IFS= read -r line; do
+		local additions deletions file
+		read -r additions deletions file <<< "$line"
+		numstat_cache["$file"]="${additions}+${deletions}-"
+	done < <(git diff --numstat 2>/dev/null || true)
+	
 	# 1. Unstaged changes section 
 	render_header "unstaged" "unstaged changes"
 
@@ -91,6 +100,7 @@ main() {
 		local FILE
 		local LAST_HASH
 		local COLOR
+		local NUMSTAT
 		
 		STAT="${line%% *}"
 		FILE="${line#* }"
@@ -105,6 +115,7 @@ main() {
 			LAST_HASH="${COLOR_NOTE}new file${COLOR_RESET}"
 			STAT="A"
 			COLOR="$COLOR_OK"
+			NUMSTAT=""
 		else
 			# Fetch and format the last hash to touch this file 
 			local RAW_HASH
@@ -115,10 +126,12 @@ main() {
 				"D") COLOR="$COLOR_KO"    ;;
 				*)   COLOR="$COLOR_ACCENT" ;;
 			esac
+			# Get numstat from cache
+			NUMSTAT=${numstat_cache["$FILE"]:-}
 		fi
 
-		# Aligned output: Status | File | Spacer | Last Hash
-		printf "${SEP}   ${COLOR}%s${COLOR_RESET} %s ${COLOR_NOTE}…${COLOR_RESET} %b\n" "$STAT" "$FILE" "$LAST_HASH"
+		# Aligned output: Status | File | Spacer | Last Hash | Numstat
+		printf "${SEP}   ${COLOR}%s${COLOR_RESET} %s ${COLOR_NOTE}%s …${COLOR_RESET} %b\n" "$STAT" "$FILE" "$NUMSTAT" "$LAST_HASH"
 	done
 	echo -e "$SEP"
 
