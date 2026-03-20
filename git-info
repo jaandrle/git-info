@@ -43,12 +43,42 @@ get_dot() { # Checks remote status for the commit dot
 	fi
 }
 
+get_default_branch() { # Detects the default branch from remote
+	# Try to get the default branch from remote using git remote show
+	local default_branch=""
+	local remote="origin"
+	
+	# Method 1: Use git remote show to find HEAD branch
+	default_branch=$(git remote show "$remote" 2>/dev/null | grep "HEAD branch" | sed 's/.*: //' | tr -d ' \n')
+	
+	if [[ -n "$default_branch" ]]; then
+		echo "$remote/$default_branch"
+		return
+	fi
+	
+	# Method 2: Fallback to common default branches
+	local common_branches=("main" "master" "develop" "trunk")
+	for branch in "${common_branches[@]}"; do
+		if git show-ref --verify --quiet "refs/remotes/$remote/$branch" 2>/dev/null; then
+			echo "$remote/$branch"
+			return
+		fi
+	done
+	
+	# Method 3: Fallback to origin/main as ultimate fallback
+	echo "$remote/main"
+}
+
 main() {
 	if [[ "${1:-}" == "help" ]]; then
 		echo "Git status inspired GitButtler cli."
 		echo "Usage: git s"
 		exit 0
 	fi
+	
+	# Detect default branch
+	local DEFAULT_BRANCH
+	DEFAULT_BRANCH=$(get_default_branch)
 	
 	# 1. Unstaged changes section 
 	render_header "unstaged" "unstaged changes"
@@ -119,14 +149,14 @@ main() {
 			CLEAN_REFS="${CLEAN_REFS//tag: /}"
 
 			# Detect if we hit the target/upstream branch using bash string search
-			if [[ "$CLEAN_REFS" == *"origin/main"* || "$CLEAN_REFS" == *"origin/master"* ]]; then
+			if [[ "$CLEAN_REFS" == *"$DEFAULT_BRANCH"* ]]; then
 				TARGET_HASH="$HASH"
 				local TARGET_REF
 				# Use bash array and loop instead of echo | tr | sed | grep pipeline
 				IFS=',' read -ra REFS_ARRAY <<< "$CLEAN_REFS"
 				for ref in "${REFS_ARRAY[@]}"; do
 					ref="${ref#"${ref%%[![:space:]]*}"}"  # trim leading whitespace
-					if [[ "$ref" == "origin/main" || "$ref" == "origin/master" ]]; then
+					if [[ "$ref" == "$DEFAULT_BRANCH" ]]; then
 						TARGET_REF="$ref"
 						break
 					fi
