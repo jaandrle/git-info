@@ -44,19 +44,25 @@ get_dot() { # Checks remote status for the commit dot
 }
 
 get_default_branch() { # Detects the default branch from remote
-	# Try to get the default branch from remote using git remote show
 	local default_branch=""
 	local remote="origin"
 	
-	# Method 1: Use git remote show to find HEAD branch
-	default_branch=$(git remote show "$remote" 2>/dev/null | grep "HEAD branch" | sed 's/.*: //' | tr -d ' \n')
-	
+	# Method 1: Check local config for default branch (fast, no network)
+	default_branch=$(git config "remote.$remote.branch.default" 2>/dev/null || true)
 	if [[ -n "$default_branch" ]]; then
 		echo "$remote/$default_branch"
 		return
 	fi
 	
-	# Method 2: Fallback to common default branches
+	# Method 2: Try to get from git symbolic-ref (very fast)
+	local head_ref
+	head_ref=$(git symbolic-ref "refs/remotes/$remote/HEAD" 2>/dev/null || true)
+	if [[ -n "$head_ref" ]]; then
+		echo "${head_ref#refs/remotes/}"
+		return
+	fi
+	
+	# Method 3: Fallback to common default branches
 	local common_branches=("main" "master" "develop" "trunk")
 	for branch in "${common_branches[@]}"; do
 		if git show-ref --verify --quiet "refs/remotes/$remote/$branch" 2>/dev/null; then
@@ -65,7 +71,7 @@ get_default_branch() { # Detects the default branch from remote
 		fi
 	done
 	
-	# Method 3: Fallback to origin/main as ultimate fallback
+	# Method 4: Ultimate fallback
 	echo "$remote/main"
 }
 
@@ -80,20 +86,27 @@ main() {
 	local DEFAULT_BRANCH
 	DEFAULT_BRANCH=$(get_default_branch)
 	
-	# Pre-fetch numstat for all files to avoid multiple git diff calls
-	local numstat_cache
+	# Pre-fetch numstat and staged files
 	declare -A numstat_cache
+	declare -A staged_files_cache
+	
+	# Pre-fetch numstat
 	while IFS= read -r line; do
 		local additions deletions file
 		read -r additions deletions file <<< "$line"
 		numstat_cache["$file"]="${additions}+${deletions}-"
 	done < <(git diff --numstat 2>/dev/null || true)
 	
+	# Pre-fetch staged files
+	while IFS= read -r line; do
+		local stat file
+		stat="${line%% *}"
+		file="${line#* }"
+		staged_files_cache["$file"]="$stat"
+	done < <(git diff --cached --name-status 2>/dev/null || true)
+	
 	# 1. Unstaged changes section 
 	render_header "unstaged" "unstaged changes"
-
-	local staget
-	staget=$(git diff --cached --name-status 2>/dev/null || true)
 	
 	git status --short --no-branch 2>/dev/null | while read -r line; do
 		local STAT
@@ -105,13 +118,12 @@ main() {
 		STAT="${line%% *}"
 		FILE="${line#* }"
 
-		for sline in $staget; do
-			if [ "$FILE" == "$sline" ]; then
-				continue 2
-			fi
-		done
+		# Check if file is staged using cached data
+		if [[ -n "${staged_files_cache[$FILE]:-}" ]]; then
+			continue
+		fi
 
-		if [[ "$STAT" == "??" || "$STAT" == "A" ]]; then
+		if [[ "$STAT" == "?" || "$STAT" == "A" ]]; then
 			LAST_HASH="${COLOR_NOTE}new file${COLOR_RESET}"
 			STAT="A"
 			COLOR="$COLOR_OK"
@@ -134,26 +146,28 @@ main() {
 		printf "${SEP}   ${COLOR}%s${COLOR_RESET} %s ${COLOR_NOTE}%s …${COLOR_RESET} %b\n" "$STAT" "$FILE" "$NUMSTAT" "$LAST_HASH"
 	done
 	echo -e "$SEP"
-
-	if [ -n "$staget" ]; then
+	
+	if [ -n "${staged_files_cache+x}" ]; then
 		render_header "staged" "staged changes"
-		while read -r line; do
-			local STAT
-			local FILE
-			
-			STAT="${line%% *}"
-			FILE="${line#* }"
-			printf "${SEP}   ${COLOR_OK}%s${COLOR_RESET} %s\n" "$STAT" "$FILE"
-		done <<< "$staget"
+		for file in "${!staged_files_cache[@]}"; do
+			local STAT="${staged_files_cache[$file]:-}"
+			printf "${SEP}   ${COLOR_OK}%s${COLOR_RESET} %s\n" "$STAT" "$file"
+		done
 		echo -e "$SEP"
 	fi
-
+	
 	# 2. Dynamic Commit Groups 
 	local CURRENT_GROUP
 	CURRENT_GROUP=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 	render_header "branch" "$CURRENT_GROUP"
 	local TARGET_HASH=""
-
+	local TARGET_REF=""
+	local TARGET_DATE=""
+	local TARGET_MSG=""
+	
+	# Cache branch contains checks
+	declare -A branch_contains_cache
+	
 	while IFS='|' read -r HASH REFS MSG AUTHT AUTHU; do
 		if [[ -n "$REFS" ]]; then
 			# Clean refs: remove HEAD pointers and tag prefixes using bash string replacement
@@ -161,11 +175,10 @@ main() {
 			CLEAN_REFS="${REFS//HEAD -> /}"
 			CLEAN_REFS="${CLEAN_REFS//tag: /}"
 
-			# Detect if we hit the target/upstream branch using bash string search
+			# Check if we hit the target/upstream branch
 			if [[ "$CLEAN_REFS" == *"$DEFAULT_BRANCH"* ]]; then
 				TARGET_HASH="$HASH"
-				local TARGET_REF
-				# Use bash array and loop instead of echo | tr | sed | grep pipeline
+				# Extract target ref
 				IFS=',' read -ra REFS_ARRAY <<< "$CLEAN_REFS"
 				for ref in "${REFS_ARRAY[@]}"; do
 					ref="${ref#"${ref%%[![:space:]]*}"}"  # trim leading whitespace
@@ -174,7 +187,6 @@ main() {
 						break
 					fi
 					done
-				break
 			fi
 
 			# Detect a new local branch label (Stacked branches) using bash array
@@ -194,21 +206,43 @@ main() {
 			fi
 		fi
 
-		echo -e "${SEP}$(get_dot "$HASH")   $(fmt_hash "$HASH") $MSG $COLOR_NOTE($AUTHT · $AUTHU)${COLOR_RESET}"
+		# Cache branch contains check result
+		if [[ -z "${branch_contains_cache[$HASH]:-}" ]]; then
+			if git branch -r --contains "$HASH" 2>/dev/null | grep -q "origin/"; then
+				branch_contains_cache["$HASH"]="1"
+			else
+				branch_contains_cache["$HASH"]="0"
+			fi
+		fi
+
+		local DOT
+		if [[ "${branch_contains_cache[$HASH]:-}" == "1" ]]; then
+			DOT="${COLOR_OK}●${COLOR_RESET}"
+		else
+			DOT="${COLOR_RESET}●${COLOR_RESET}"
+		fi
+
+		echo -e "${SEP}$DOT   $(fmt_hash "$HASH") $MSG $COLOR_NOTE($AUTHT · $AUTHU)${COLOR_RESET}"
 	done < <(git log --format="%h|%D|%s|%ar|%an" HEAD 2>/dev/null || true)
-
+	
 	# 3. Footer Section 
-	[[ -z "$TARGET_HASH" ]] && TARGET_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "") && TARGET_REF="unknown"
-
-	local F_DATE
-	local F_MSG
-	F_DATE=$(git show -s --format='%as' "$TARGET_HASH" 2>/dev/null || echo "")
-	F_MSG=$(git show -s --format='%s' "$TARGET_HASH" 2>/dev/null || echo "")
-
+	if [[ -z "$TARGET_HASH" ]]; then
+		TARGET_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "")
+		TARGET_REF="unknown"
+	fi
+	
+	# Fetch target commit info in one call if not already cached
+	if [[ -z "$TARGET_DATE" || -z "$TARGET_MSG" ]]; then
+		local target_info
+		target_info=$(git show -s --format='%as|%s' "$TARGET_HASH" 2>/dev/null || echo "")
+		IFS='|' read -r TARGET_DATE TARGET_MSG <<< "$target_info"
+	fi
+	
 	echo -e "${COLOR_NOTE}├╯${COLOR_RESET}\n$SEP"
-	echo -e "┴ $(fmt_hash "$TARGET_HASH") ${COLOR_STRONG}[${COLOR_BRANCH}${TARGET_REF}${COLOR_RESET}${COLOR_STRONG}]${COLOR_RESET} ${COLOR_DIM}${F_DATE}${COLOR_RESET} ${COLOR_DIM}${F_MSG}${COLOR_RESET}"
+	echo -e "┴ $(fmt_hash "$TARGET_HASH") ${COLOR_STRONG}[${COLOR_BRANCH}${TARGET_REF}${COLOR_RESET}${COLOR_STRONG}]${COLOR_RESET} ${COLOR_DIM}${TARGET_DATE}${COLOR_RESET} ${COLOR_DIM}${TARGET_MSG}${COLOR_RESET}"
 	# white dim
 	echo -e "\n\e[37m${COLOR_NOTE}Hint: run \`git diff\` to see changes or \`git add\` to stage${COLOR_RESET}"
 }
 
 main "$@"
+# test modification
