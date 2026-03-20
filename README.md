@@ -61,8 +61,8 @@ For help:
 ┊   M git-info 13+3- … 6089a06
 ┊   A README.md  … new file
 ┊
-┊╭┄ [main]
-┊●   6089a06 :zap: Improves UI staged+branch (11 minutes ago · Jan Andrle)
+┊╭┄ [example]
+┊◐   6089a06 :zap: Improves UI staged+branch (11 minutes ago · Jan Andrle)
 ┊●   bc095a5 :bug: Ensures proper (un)stage detection (19 minutes ago · Jan Andrle)
 ┊●   12d3561 :zap: Makes hint align with repo state (49 minutes ago · Jan Andrle)
 ┊●   eb0837e :zap: Adds inprogress operation info (68 minutes ago · Jan Andrle)
@@ -90,5 +90,5 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 
 ## TODO
 - [ ] :zap: ensure all commits listed for unstaged files
-- [ ] :bug: wrong UI/UX when local/remote branch are aligned
+- [x] :bug: wrong UI/UX when local/remote branch are aligned
 - [ ] :zap: `-f` flag for including also files

@@ -98,17 +98,20 @@ echo_in_progress() { # Renders rebase/merge/cherry-pick/revert in progress
 		total=""
 	fi
 
-	if [[ -n "$operation" ]]; then
-		local color="${COLOR_KO}"
-		if [[ "$operation" == "merge" ]]; then
-			color="${COLOR_ACCENT}"
-		fi
-		if [[ -n "$step" && -n "$total" && "$total" != "?" ]]; then
-			echo -e "${color}! $operation ($step/$total)${COLOR_RESET}"
-		else
-			echo -e "${color}! $operation${COLOR_RESET}"
-		fi
+	if [[ -z "$operation" ]]; then
+		return 1
 	fi
+	
+	local color="${COLOR_KO}"
+	if [[ "$operation" == "merge" ]]; then
+		color="${COLOR_ACCENT}"
+	fi
+	if [[ -n "$step" && -n "$total" && "$total" != "?" ]]; then
+		echo -e "${color}! $operation ($step/$total)${COLOR_RESET}"
+	else
+		echo -e "${color}! $operation${COLOR_RESET}"
+	fi
+	echo
 }
 get_default_branch() { # Detects the default branch from remote
 	local default_branch=""
@@ -177,6 +180,7 @@ main() {
 	
 	# Pre-fetch numstat and staged files
 	declare -A numstat_cache staged_files_cache
+	numstat_cache=()
 	staged_files_cache=()
 	
 	# Pre-fetch numstat
@@ -194,11 +198,8 @@ main() {
 	done < <(git diff --cached --name-status 2>/dev/null)
 	
 	# 0. Check for in-progress operations
-	local IN_PROGRESS
-	IN_PROGRESS=$(echo_in_progress)
-	if [[ -n "$IN_PROGRESS" ]]; then
-		echo -e "${IN_PROGRESS}"
-		echo -e "${SEP}"
+	if ! echo_in_progress; then
+		echo
 	fi
 
 	# 1. Unstaged changes section 
@@ -283,9 +284,9 @@ main() {
 					ref="${ref#"${ref%%[![:space:]]*}"}"  # trim leading whitespace
 					if [[ "$ref" == "$DEFAULT_BRANCH" ]]; then
 						TARGET_REF="$ref"
-						break
+						break 2
 					fi
-					done
+				done
 			fi
 
 			# Detect a new local branch label (Stacked branches) using bash array
@@ -317,7 +318,7 @@ main() {
 		local DOT
 		DOT=$(echo_remote_status "${branch_contains_cache[$HASH]:-}")
 		echo -e "${SEP}$DOT   $(fmt_hash "$HASH") $MSG $COLOR_NOTE($AUTHT · $AUTHU)${COLOR_RESET}"
-	done < <(git log --format="%h|%D|%s|%ar|%an" HEAD 2>/dev/null || true)
+	done < <(git log --format="%h|%D|%s|%ar|%an" HEAD 2>/dev/null || echo "")
 	
 	# 3. Footer Section 
 	if [[ -z "$TARGET_HASH" ]]; then
