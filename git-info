@@ -43,6 +43,53 @@ get_dot() { # Checks remote status for the commit dot
 	fi
 }
 
+render_in_progress() { # Renders rebase/merge/cherry-pick/revert in progress
+	local state_dir=""
+	local operation=""
+	local step=""
+	local total=""
+
+	if [[ -d .git/rebase-merge ]]; then
+		state_dir=".git/rebase-merge"
+		if [[ -f "$state_dir/interactive" ]]; then
+			operation="rebase -i"
+		else
+			operation="rebase"
+		fi
+		step=$(cat "$state_dir/msgnum" 2>/dev/null || echo "1")
+		total=$(cat "$state_dir/end" 2>/dev/null || echo "?")
+	elif [[ -d .git/rebase-apply ]]; then
+		state_dir=".git/rebase-apply"
+		operation="rebase"
+		step=$(cat "$state_dir/next" 2>/dev/null || echo "1")
+		total=$(cat "$state_dir/last" 2>/dev/null || echo "?")
+	elif [[ -f .git/MERGE_HEAD ]]; then
+		operation="merge"
+		step=""
+		total=""
+	elif [[ -f .git/CHERRY_PICK_HEAD ]]; then
+		operation="cherry-pick"
+		step=""
+		total=""
+	elif [[ -f .git/REVERT_HEAD ]]; then
+		operation="revert"
+		step=""
+		total=""
+	fi
+
+	if [[ -n "$operation" ]]; then
+		local color="${COLOR_KO}"
+		if [[ "$operation" == "merge" ]]; then
+			color="${COLOR_ACCENT}"
+		fi
+		if [[ -n "$step" && -n "$total" && "$total" != "?" ]]; then
+			echo -e "${color}! $operation ($step/$total)${COLOR_RESET}"
+		else
+			echo -e "${color}! $operation${COLOR_RESET}"
+		fi
+	fi
+}
+
 get_default_branch() { # Detects the default branch from remote
 	local default_branch=""
 	local remote="origin"
@@ -105,6 +152,14 @@ main() {
 		staged_files_cache["$file"]="$stat"
 	done < <(git diff --cached --name-status 2>/dev/null || true)
 	
+	# 0. Check for in-progress operations
+	local IN_PROGRESS
+	IN_PROGRESS=$(render_in_progress)
+	if [[ -n "$IN_PROGRESS" ]]; then
+		echo -e "${IN_PROGRESS}"
+		echo -e "${SEP}"
+	fi
+
 	# 1. Unstaged changes section 
 	render_header "unstaged" "unstaged changes"
 	
