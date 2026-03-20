@@ -43,6 +43,30 @@ get_dot() { # Checks remote status for the commit dot
 	fi
 }
 
+get_in_progress() { # Detects rebase/merge/cherry-pick/revert in progress and outputs operation type
+	local state_dir=""
+	local operation=""
+
+	if [[ -d .git/rebase-merge ]]; then
+		state_dir=".git/rebase-merge"
+		if [[ -f "$state_dir/interactive" ]]; then
+			operation="rebase"
+		else
+			operation="rebase"
+		fi
+	elif [[ -d .git/rebase-apply ]]; then
+		operation="rebase"
+	elif [[ -f .git/MERGE_HEAD ]]; then
+		operation="merge"
+	elif [[ -f .git/CHERRY_PICK_HEAD ]]; then
+		operation="cherry-pick"
+	elif [[ -f .git/REVERT_HEAD ]]; then
+		operation="revert"
+	fi
+
+	echo "$operation"
+}
+
 render_in_progress() { # Renders rebase/merge/cherry-pick/revert in progress
 	local state_dir=""
 	local operation=""
@@ -295,8 +319,45 @@ main() {
 	
 	echo -e "${COLOR_NOTE}├╯${COLOR_RESET}\n$SEP"
 	echo -e "┴ $(fmt_hash "$TARGET_HASH") ${COLOR_STRONG}[${COLOR_BRANCH}${TARGET_REF}${COLOR_RESET}${COLOR_STRONG}]${COLOR_RESET} ${COLOR_DIM}${TARGET_DATE}${COLOR_RESET} ${COLOR_DIM}${TARGET_MSG}${COLOR_RESET}"
-	# white dim
-	echo -e "\n\e[37m${COLOR_NOTE}Hint: run \`git diff\` to see changes or \`git add\` to stage${COLOR_RESET}"
+	
+	local HINT=""
+	local IN_PROGRESS_OP
+	IN_PROGRESS_OP=$(get_in_progress)
+	if [[ -n "$IN_PROGRESS_OP" ]]; then
+		case "$IN_PROGRESS_OP" in
+			"rebase")      HINT="resolve conflicts, \`git add\`, then \`git rebase --continue\`" ;;
+			"merge")       HINT="resolve conflicts, \`git add\`, then \`git commit\`" ;;
+			"cherry-pick") HINT="resolve conflicts, \`git add\`, then \`git cherry-pick --continue\`" ;;
+			"revert")      HINT="resolve conflicts, \`git add\`, then \`git revert --continue\`" ;;
+		esac
+	else
+		local has_unstaged=false
+		local has_staged=false
+		if [[ -n "${numstat_cache:+x}" || -n "${staged_files_cache:+x}" ]]; then
+			if [[ ${#numstat_cache[@]} -gt 0 ]]; then
+				has_unstaged=true
+			fi
+			if [[ ${#staged_files_cache[@]} -gt 0 ]]; then
+				has_staged=true
+			fi
+		else
+			if git status --short --no-branch 2>/dev/null | grep -q .; then
+				has_unstaged=true
+			fi
+			if git diff --cached --name-status 2>/dev/null | grep -q .; then
+				has_staged=true
+			fi
+		fi
+		
+		if $has_staged; then
+			HINT="run \`git commit\` to commit staged changes"
+		elif $has_unstaged; then
+			HINT="run \`git diff\` to see changes, \`git add\` to stage"
+		else
+			HINT="branch is up-to-date"
+		fi
+	fi
+	echo -e "\n\e[37m${COLOR_NOTE}Hint: ${HINT}${COLOR_RESET}"
 }
 
 main "$@"
