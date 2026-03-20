@@ -28,7 +28,7 @@ render_header() { # Renders consistent branch/section headers
 	local label="$2"
 	case "$type" in
 		"unstaged") echo -e "${COLOR_NOTE}╭┄ [$label]${COLOR_RESET}" ;;
-		"staged") echo -e "${COLOR_NOTE}├┄ [$label]${COLOR_RESET}" ;;
+		"staged") echo -e "${SEP}${COLOR_NOTE}╭┄ [$label]${COLOR_RESET}" ;;
 		"branch")   echo -e "${SEP}${COLOR_NOTE}╭┄ [${COLOR_STRONG}${COLOR_BRANCH}${label}${COLOR_RESET}${COLOR_NOTE}]${COLOR_RESET}" ;;
 		"stacked")  echo -e "${SEP}${COLOR_NOTE}├┄ [${COLOR_STRONG}${COLOR_BRANCH}${label}${COLOR_RESET}${COLOR_NOTE}]${COLOR_RESET}" ;;
 	esac
@@ -228,15 +228,19 @@ main() {
 		render_header "staged" "staged changes"
 		for file in "${!staged_files_cache[@]}"; do
 			local STAT="${staged_files_cache[$file]:0:1}"
-			printf "${SEP}   ${COLOR_OK}%s${COLOR_RESET} %s\n" "$STAT" "$file"
+			printf "${SEP}${COLOR_NOTE}│${COLOR_RESET}   ${COLOR_OK}%s${COLOR_RESET} %s\n" "$STAT" "$file"
 		done
-		echo -e "$SEP"
+		echo -e "${SEP}${COLOR_NOTE}│${COLOR_RESET}"
 	fi
 	
 	# 2. Dynamic Commit Groups 
 	local CURRENT_GROUP
 	CURRENT_GROUP=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-	render_header "branch" "$CURRENT_GROUP"
+	if [[ ${#staged_files_cache[@]} -gt 0 ]]; then
+		render_header "stacked" "$CURRENT_GROUP"
+	else
+		render_header "branch" "$CURRENT_GROUP"
+	fi
 	local TARGET_HASH=""
 	local TARGET_REF=""
 	local TARGET_DATE=""
