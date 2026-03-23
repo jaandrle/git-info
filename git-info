@@ -3,34 +3,48 @@
 set -euo pipefail
 
 # --- Theme Configuration ---
-readonly COLOR_ACCENT='\033[33m'  # Orange
-readonly COLOR_BRANCH='\033[34m'  # Blue
+readonly COLOR_ACCENT='\033[34m'  # Blue
+readonly COLOR_SECTION='\033[32m' # Green
 readonly COLOR_STRONG='\033[1m'   # Bold
 readonly COLOR_OK='\033[32m'      # Green
+readonly COLOR_WARN='\033[33m'    # Orange
 readonly COLOR_KO='\033[31m'      # Red
 readonly COLOR_NOTE='\033[37;2m'  # GRAY
 
 readonly SEP='┊'
 
 # --- Internal ---
-readonly VERSION="1.0.0"
+readonly VERSION="1.1.0"
 readonly COLOR_RESET='\033[0m'
 readonly COLOR_DIM='\033[2m'
 
 # --- Functions ---
-fmt_hash() { # formats a 7-char hash with a 4/3 color split
+fmt_hash() { # formats a 7-char hash with first 4 chars in accent color, last 3 dimmed 
 	local hash="$1"
-	# First 4 chars in accent color, last 3 dimmed 
 	echo -ne "${COLOR_ACCENT}${hash:0:4}${COLOR_DIM}${hash:4:3}${COLOR_RESET}"
+}
+fmt_label() {
+	local mode="${1:-accent}" # accent, normal
+	local label="${2:-}"
+	local color="${COLOR_SECTION}"
+	if [[ "$mode" == "normal" ]]; then
+		color="\033[36m" # cyan
+	fi
+	printf "[${COLOR_STRONG}${color}%s${COLOR_RESET}]" "$label"
+}
+fmt_auth() {
+	local user="$1"
+	local relative="$2"
+	printf "$COLOR_NOTE(%s · %s)${COLOR_RESET}" "$user" "$relative"
 }
 render_header() { # branch/section headers
 	local type="$1"
 	local label="$2"
 	case "$type" in
-		"unstaged") echo -e "${COLOR_NOTE}╭┄ [$label]${COLOR_RESET}" ;;
-		"staged") echo -e "${SEP}${COLOR_NOTE}╭┄ [$label]${COLOR_RESET}" ;;
-		"branch")   echo -e "${SEP}${COLOR_NOTE}╭┄ [${COLOR_STRONG}${COLOR_BRANCH}${label}${COLOR_RESET}${COLOR_NOTE}]${COLOR_RESET}" ;;
-		"stacked")  echo -e "${SEP}${COLOR_NOTE}├┄ [${COLOR_STRONG}${COLOR_BRANCH}${label}${COLOR_RESET}${COLOR_NOTE}]${COLOR_RESET}" ;;
+		"unstaged") echo -e "╭┄┄ $(fmt_label normal "$label")" ;;
+		"staged") echo -e "${SEP}╭┄┄ $(fmt_label normal "$label")" ;;
+		"branch")   echo -e "${SEP}╭┄ $(fmt_label accent "$label")" ;;
+		"stacked")  echo -e "${SEP}├┄ $(fmt_label accent "$label")" ;;
 	esac
 }
 echo_remote_status() { # Checks remote status for the commit dot 
@@ -99,10 +113,10 @@ echo_in_progress() { # Renders rebase/merge/cherry-pick/revert in progress
 	fi
 
 	if [[ -z "$operation" ]]; then
-		return 1
+		return 0
 	fi
 	
-	local color="${COLOR_KO}"
+	local color="${COLOR_WARN}"
 	if [[ "$operation" == "merge" ]]; then
 		color="${COLOR_ACCENT}"
 	fi
@@ -163,10 +177,9 @@ main() {
 		echo "  staged changes, commit history, and branch information."
 		echo ""
 		echo "UI Elements:"
-		echo "  ╭┄ [section]      Section headers"
-		echo "  ┊                Vertical separator line"
+		echo "  ╭┄ [section]     Section headers (branch/staged/unstaged)"
 		echo "  ●                Commit on remote (green)"
-		echo "  ◐                Commit not on remote yet (gray)"
+		echo "  ◐                Commit not on remote yet"
 		echo "  ! operation      In-progress Git operation"
 		echo "  M/A/D            File status (Modified/Added/Deleted)"
 		echo "  ┴ hash [branch]  Footer with target branch info"
@@ -197,59 +210,79 @@ main() {
 		staged_files_cache["$file"]="$stat"
 	done < <(git diff --cached --name-status 2>/dev/null)
 	
-	# 0. Check for in-progress operations
-	if ! echo_in_progress; then
-		echo
+	local has_unstaged=false
+	local has_staged=false
+	if [[ -n "${numstat_cache:+x}" || -n "${staged_files_cache:+x}" ]]; then
+		if [[ ${#numstat_cache[@]} -gt 0 ]]; then
+			has_unstaged=true
+		fi
+		if [[ ${#staged_files_cache[@]} -gt 0 ]]; then
+			has_staged=true
+		fi
+	else
+		if git status --short --no-branch 2>/dev/null | grep -q .; then
+			has_unstaged=true
+		fi
+		if git diff --cached --name-status 2>/dev/null | grep -q .; then
+			has_staged=true
+		fi
 	fi
+	
+	# 0. Check for in-progress operations
+	echo_in_progress
 
 	# 1. Unstaged changes section 
 	render_header "unstaged" "unstaged changes"
 	
-	git status --short --no-branch 2>/dev/null | while IFS= read -r line; do
-		local STAT
-		local FILE
-		local LAST_HASH
-		local COLOR
-		local NUMSTAT
-		
-		STAT="${line:0:2}"
-		FILE="${line:3}"
+	if [[ $has_unstaged != true ]]; then
+		local COLOR_EMPHASIS="\e[3m"
+		echo -e "${SEP}    ${COLOR_EMPHASIS}no changes${COLOR_RESET}"
+	else
+		git status --short --no-branch 2>/dev/null | while IFS= read -r line; do
+			local STAT
+			local FILE
+			local LAST_HASH
+			local COLOR
+			local NUMSTAT
+			
+			STAT="${line:0:2}"
+			FILE="${line:3}"
 
-		[[ -z "$FILE" ]] && continue
-		[[ "${STAT:1:1}" == " " ]] && continue
+			[[ -z "$FILE" ]] && continue
+			[[ "${STAT:1:1}" == " " ]] && continue
 
-		local UNSTAGED_STAT="${STAT:1:1}"
-		if [[ "$STAT" == "?" || "$STAT" == "A" || "$UNSTAGED_STAT" == "?" || "$UNSTAGED_STAT" == "A" ]]; then
-			LAST_HASH="${COLOR_NOTE}new file${COLOR_RESET}"
-			UNSTAGED_STAT="A"
-			COLOR="$COLOR_OK"
-			NUMSTAT=""
-		else
-			# Fetch and format the last hash to touch this file 
-			local RAW_HASH
-			RAW_HASH=$(git log -1 --format="%h" -- "$FILE" 2>/dev/null || echo "")
-			LAST_HASH=$(fmt_hash "$RAW_HASH")
-			case "$UNSTAGED_STAT" in
-				"M") COLOR="$COLOR_ACCENT" ;;
-				"D") COLOR="$COLOR_KO"    ;;
-				*)   COLOR="$COLOR_ACCENT" ;;
-			esac
-			# Get numstat from cache
-			NUMSTAT=${numstat_cache["$FILE"]:-}
-		fi
+			local UNSTAGED_STAT="${STAT:1:1}"
+			if [[ "$STAT" == "?" || "$STAT" == "A" || "$UNSTAGED_STAT" == "?" || "$UNSTAGED_STAT" == "A" ]]; then
+				LAST_HASH="${COLOR_NOTE}new file${COLOR_RESET}"
+				UNSTAGED_STAT="A"
+				COLOR="$COLOR_OK"
+				NUMSTAT=""
+			else
+				# Fetch and format the last hash to touch this file 
+				local RAW_HASH
+				RAW_HASH=$(git log -1 --format="%h" -- "$FILE" 2>/dev/null || echo "")
+				LAST_HASH=$(fmt_hash "$RAW_HASH")
+				case "$UNSTAGED_STAT" in
+					"M") COLOR="$COLOR_WARN" ;;
+					"D") COLOR="$COLOR_KO"    ;;
+					*)   COLOR="$COLOR_ACCENT" ;;
+				esac
+				# Get numstat from cache
+				NUMSTAT=${numstat_cache["$FILE"]:-}
+			fi
 
-		# Aligned output: Status | File | Spacer | Last Hash | Numstat
-		printf "${SEP}   ${COLOR}%s${COLOR_RESET} %s ${COLOR_NOTE}%s …${COLOR_RESET} %b\n" "$UNSTAGED_STAT" "$FILE" "$NUMSTAT" "$LAST_HASH"
-	done
+			# Aligned output: Status | File | Spacer | Last Hash | Numstat
+			printf "${SEP}    %s ${COLOR}%s${COLOR_RESET} ${COLOR_NOTE}%s …${COLOR_RESET} %b\n" "$UNSTAGED_STAT" "$FILE" "$NUMSTAT" "$LAST_HASH"
+		done
+	fi
 	echo -e "$SEP"
-	
-	if [[ ${#staged_files_cache[@]} -gt 0 ]]; then
+	if [[ $has_staged == true ]]; then
 		render_header "staged" "staged changes"
 		for file in "${!staged_files_cache[@]}"; do
 			local STAT="${staged_files_cache[$file]:0:1}"
-			printf "${SEP}${COLOR_NOTE}│${COLOR_RESET}   ${COLOR_OK}%s${COLOR_RESET} %s\n" "$STAT" "$file"
+			printf "${SEP}│   ${COLOR_OK}%s${COLOR_RESET} %s\n" "$STAT" "$file"
 		done
-		echo -e "${SEP}${COLOR_NOTE}│${COLOR_RESET}"
+		echo -e "${SEP}│"
 	fi
 	
 	# 2. Dynamic Commit Groups 
@@ -262,8 +295,6 @@ main() {
 	fi
 	local TARGET_HASH=""
 	local TARGET_REF=""
-	local TARGET_DATE=""
-	local TARGET_MSG=""
 	
 	# Cache branch contains checks
 	declare -A branch_contains_cache
@@ -301,7 +332,7 @@ main() {
 				done
 			if [[ -n "$NEW_GROUP" && "$NEW_GROUP" != "$CURRENT_GROUP" ]]; then
 				CURRENT_GROUP="$NEW_GROUP"
-				echo -e "${SEP}${COLOR_NOTE}│${COLOR_RESET}"
+				echo -e "${SEP}│"
 				render_header "stacked" "$CURRENT_GROUP"
 			fi
 		fi
@@ -317,7 +348,7 @@ main() {
 
 		local DOT
 		DOT=$(echo_remote_status "${branch_contains_cache[$HASH]:-}")
-		echo -e "${SEP}$DOT   $(fmt_hash "$HASH") $MSG $COLOR_NOTE($AUTHT · $AUTHU)${COLOR_RESET}"
+		echo -e "${SEP}$DOT   $(fmt_hash "$HASH") $MSG $(fmt_auth "$AUTHU" "$AUTHT")"
 	done < <(git log --format="%h|%D|%s|%ar|%an" HEAD 2>/dev/null || echo "")
 	
 	# 3. Footer Section 
@@ -326,15 +357,18 @@ main() {
 		TARGET_REF="unknown"
 	fi
 	
+	local TARGET_DATE=""
+	local TARGET_MSG=""
+	local TARGET_AUTHOR=""
 	# Fetch target commit info in one call if not already cached
 	if [[ -z "$TARGET_DATE" || -z "$TARGET_MSG" ]]; then
 		local target_info
-		target_info=$(git show -s --format='%as|%s' "$TARGET_HASH" 2>/dev/null || echo "")
-		IFS='|' read -r TARGET_DATE TARGET_MSG <<< "$target_info"
+		target_info=$(git show -s --format='%ar|%an|%s' "$TARGET_HASH" 2>/dev/null || echo "")
+		IFS='|' read -r TARGET_DATE TARGET_AUTHOR TARGET_MSG <<< "$target_info"
 	fi
 	
-	echo -e "${COLOR_NOTE}├╯${COLOR_RESET}\n$SEP"
-	echo -e "┴ $(fmt_hash "$TARGET_HASH") ${COLOR_STRONG}[${COLOR_BRANCH}${TARGET_REF}${COLOR_RESET}${COLOR_STRONG}]${COLOR_RESET} ${COLOR_DIM}${TARGET_DATE}${COLOR_RESET} ${COLOR_DIM}${TARGET_MSG}${COLOR_RESET}"
+	echo -e "├╯\n$SEP"
+	echo -e "┴ $(fmt_hash "$TARGET_HASH") $(fmt_label accent "$TARGET_REF") ${TARGET_MSG} $(fmt_auth "$TARGET_AUTHOR" "$TARGET_DATE")"
 	
 	local HINT=""
 	local IN_PROGRESS_OP
@@ -347,33 +381,15 @@ main() {
 			"revert")      HINT="resolve conflicts, \`git add\`, then \`git revert --continue\`" ;;
 		esac
 	else
-		local has_unstaged=false
-		local has_staged=false
-		if [[ -n "${numstat_cache:+x}" || -n "${staged_files_cache:+x}" ]]; then
-			if [[ ${#numstat_cache[@]} -gt 0 ]]; then
-				has_unstaged=true
-			fi
-			if [[ ${#staged_files_cache[@]} -gt 0 ]]; then
-				has_staged=true
-			fi
-		else
-			if git status --short --no-branch 2>/dev/null | grep -q .; then
-				has_unstaged=true
-			fi
-			if git diff --cached --name-status 2>/dev/null | grep -q .; then
-				has_staged=true
-			fi
-		fi
-		
 		if $has_staged; then
 			HINT="run \`git commit\` to commit staged changes"
 		elif $has_unstaged; then
 			HINT="run \`git diff\` to see changes, \`git add\` to stage"
-		else
-			HINT="branch is up-to-date"
 		fi
 	fi
-	echo -e "\n\e[37m${COLOR_NOTE}Hint: ${HINT}${COLOR_RESET}"
+	if [[ -n "$HINT" ]]; then
+		echo -e "\n\e[37m${COLOR_NOTE}Hint: ${HINT}${COLOR_RESET}"
+	fi
 }
 
 # --- Execution ---
