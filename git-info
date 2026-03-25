@@ -23,6 +23,19 @@ fmt_hash() { # formats a 7-char hash with first 4 chars in accent color, last 3 
 	local hash="$1"
 	echo -ne "${COLOR_ACCENT}${hash:0:4}${COLOR_DIM}${hash:4:3}${COLOR_RESET}"
 }
+
+fmt_hashes() { # formats multiple hashes separated by commas
+	local hashes="$1"
+	local result=""
+	local IFS=','
+	for hash in $hashes; do
+		if [[ -n "$result" ]]; then
+			result="$result "
+		fi
+		result="$result$(fmt_hash "$hash")"
+	done
+	echo -ne "$result"
+}
 fmt_label() {
 	local mode="${1:-accent}" # accent, normal
 	local label="${2:-}"
@@ -61,7 +74,7 @@ echo_file_entry() { # Prints a file entry with consistent formatting
 	local status="$1"
 	local file="$2"
 	local context="$3" # unstaged, staged, or stashed
-	local hash="${4:-}"    # Optional: last commit hash
+	local hash="${4:-}"    # Optional: last commit hash (or multiple hashes)
 	local numstat="${5:-}" # Optional: numstat string
 	
 	local color=""
@@ -80,7 +93,13 @@ echo_file_entry() { # Prints a file entry with consistent formatting
 	
 	# Set hash display
 	if [[ -n "$hash" ]]; then
-		hash_display="$hash"
+		if [[ "$hash" == *","* ]]; then
+			# Multiple hashes - use fmt_hashes
+			hash_display="$(fmt_hashes "$hash")"
+		else
+			# Single hash - use fmt_hash
+			hash_display="$(fmt_hash "$hash")"
+		fi
 	else
 		hash_display="${COLOR_NOTE}new file${COLOR_RESET}"
 	fi
@@ -313,10 +332,10 @@ main() {
 				UNSTAGED_STAT="A"
 				NUMSTAT=""
 			else
-				# Fetch and format the last hash to touch this file 
-				local RAW_HASH
-				RAW_HASH=$(git log -1 --format="%h" -- "$FILE" 2>/dev/null || echo "")
-				LAST_HASH=$(fmt_hash "$RAW_HASH")
+				# Fetch and format all hashes that touched this file, limited to DEFAULT_BRANCH
+				local RAW_HASHES
+				RAW_HASHES=$(git log --format="%h" "$DEFAULT_BRANCH"..HEAD -- "$FILE" 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+				LAST_HASH="$RAW_HASHES"
 				# Get numstat from cache
 				NUMSTAT=${numstat_cache["$FILE"]:-}
 			fi
@@ -362,9 +381,9 @@ main() {
 									NUMSTAT=""
 								else
 									# Fetch and format the last hash to touch this file 
-									local RAW_HASH
-									RAW_HASH=$(git log -1 --format="%h" -- "$FILE" 2>/dev/null || echo "")
-									LAST_HASH=$(fmt_hash "$RAW_HASH")
+									local RAW_HASHES
+									RAW_HASHES=$(git log --format="%h" "$DEFAULT_BRANCH".."$stash_index" -- "$FILE" 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+									LAST_HASH="$RAW_HASHES"
 									# Get numstat for this file
 									NUMSTAT=$(git diff --numstat "$stash_index^..$stash_index" -- "$FILE" 2>/dev/null | awk '{print $1"+"$2"-"}' || echo "")
 								fi

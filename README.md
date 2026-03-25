@@ -87,8 +87,3 @@ Hint: run `git diff` to see changes, `git add` to stage
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
-## TODO
-- [ ] :zap: ensure all commits listed for unstaged files
-- [x] :bug: wrong UI/UX when local/remote branch are aligned
-- [x] :zap: `-f` flag for including also files
