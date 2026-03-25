@@ -3,13 +3,14 @@
 set -euo pipefail
 
 # --- Theme Configuration ---
-readonly COLOR_ACCENT='\033[34m'  # Blue
-readonly COLOR_SECTION='\033[32m' # Green
-readonly COLOR_STRONG='\033[1m'   # Bold
-readonly COLOR_OK='\033[32m'      # Green
-readonly COLOR_WARN='\033[33m'    # Orange
-readonly COLOR_KO='\033[31m'      # Red
-readonly COLOR_NOTE='\033[37;2m'  # GRAY
+readonly COLOR_ACCENT='\033[34m'      # Blue
+readonly COLOR_SECTION='\033[32m'     # Green
+readonly COLOR_SECTION_ALT='\033[36m' # Cyan
+readonly COLOR_STRONG='\033[1m'       # Bold
+readonly COLOR_OK='\033[32m'          # Green
+readonly COLOR_WARN='\033[33m'        # Orange
+readonly COLOR_KO='\033[31m'          # Red
+readonly COLOR_NOTE='\033[37;2m'      # GRAY
 
 readonly SEP='┊'
 
@@ -28,16 +29,18 @@ fmt_label() {
 	local label="${2:-}"
 	local color="${COLOR_SECTION}"
 	if [[ "$mode" == "normal" ]]; then
-		color="\033[36m" # cyan
+		color="${COLOR_SECTION_ALT}"
 	fi
-	printf "[${COLOR_STRONG}${color}%s${COLOR_RESET}]" "$label"
+	printf "[${COLOR_STRONG}${color}%s${COLOR_RESET}]" \
+		"$label"
 }
 fmt_auth() {
 	local user="$1"
 	local relative="$2"
-	printf "$COLOR_NOTE(%s · %s)${COLOR_RESET}" "$user" "$relative"
+	printf "$COLOR_NOTE(%s · %s)${COLOR_RESET}" \
+		"$user" "$relative"
 }
-render_header() { # branch/section headers
+echo_header() { # branch/section headers
 	local type="$1"
 	local label="$2"
 	case "$type" in
@@ -53,6 +56,53 @@ echo_remote_status() { # Checks remote status for the commit dot
 		echo -e "${COLOR_OK}●${COLOR_RESET}"
 	else
 		echo -e "${COLOR_RESET}◐${COLOR_RESET}"
+	fi
+}
+echo_file_entry() { # Prints a file entry with consistent formatting
+	local status="$1"
+	local file="$2"
+	local context="$3" # unstaged, staged, or stashed
+	local hash="${4:-}"    # Optional: last commit hash
+	local numstat="${5:-}" # Optional: numstat string
+	
+	local color=""
+	local status_char=""
+	local hash_display=""
+	local output_format="" # !!! format for printf
+	
+	# Determine status character and color based on context
+	if [[ "$context" == "staged" ]]; then
+		status_char="${status:0:1}"
+		color="${COLOR_OK}"
+		output_format="${SEP}│   ${color}%s${COLOR_RESET} %s\n"
+	elif [[ "$context" == "unstaged" || "$context" == "stashed" ]]; then
+		status_char="${status:0:1}"
+		
+		# Set color based on status
+		case "$status_char" in
+			"M") color="${COLOR_WARN}" ;;
+			"D") color="${COLOR_KO}"    ;;
+			"A") color="${COLOR_OK}"    ;;
+			*)   color="${COLOR_ACCENT}" ;;
+		esac
+		
+		# Set hash display
+		if [[ -n "$hash" ]]; then
+			hash_display="$hash"
+		else
+			hash_display="${COLOR_NOTE}new file${COLOR_RESET}"
+		fi
+		
+		output_format="${SEP}    %s ${color}%s${COLOR_RESET} ${COLOR_NOTE}%s …${COLOR_RESET} %b\n"
+	fi
+	
+	# Print the formatted file entry
+	if [[ "$context" == "staged" ]]; then
+		# shellcheck disable=SC2059 … format in variable
+		printf "$output_format" "$status_char" "$file"
+	else
+		# shellcheck disable=SC2059 … format in variable
+		printf "$output_format" "$status_char" "$file" "$numstat" "$hash_display"
 	fi
 }
 get_in_progress() { # Detects rebase/merge/cherry-pick/revert in progress and outputs operation type
@@ -232,7 +282,7 @@ main() {
 	echo_in_progress
 
 	# 1. Unstaged changes section 
-	render_header "unstaged" "unstaged changes"
+	echo_header "unstaged" "unstaged changes"
 	
 	if [[ $has_unstaged != true ]]; then
 		local COLOR_EMPHASIS="\e[3m"
@@ -242,7 +292,6 @@ main() {
 			local STAT
 			local FILE
 			local LAST_HASH
-			local COLOR
 			local NUMSTAT
 			
 			STAT="${line:0:2}"
@@ -253,34 +302,82 @@ main() {
 
 			local UNSTAGED_STAT="${STAT:1:1}"
 			if [[ "$STAT" == "?" || "$STAT" == "A" || "$UNSTAGED_STAT" == "?" || "$UNSTAGED_STAT" == "A" ]]; then
-				LAST_HASH="${COLOR_NOTE}new file${COLOR_RESET}"
+				LAST_HASH=""
 				UNSTAGED_STAT="A"
-				COLOR="$COLOR_OK"
 				NUMSTAT=""
 			else
 				# Fetch and format the last hash to touch this file 
 				local RAW_HASH
 				RAW_HASH=$(git log -1 --format="%h" -- "$FILE" 2>/dev/null || echo "")
 				LAST_HASH=$(fmt_hash "$RAW_HASH")
-				case "$UNSTAGED_STAT" in
-					"M") COLOR="$COLOR_WARN" ;;
-					"D") COLOR="$COLOR_KO"    ;;
-					*)   COLOR="$COLOR_ACCENT" ;;
-				esac
 				# Get numstat from cache
 				NUMSTAT=${numstat_cache["$FILE"]:-}
 			fi
 
-			# Aligned output: Status | File | Spacer | Last Hash | Numstat
-			printf "${SEP}    %s ${COLOR}%s${COLOR_RESET} ${COLOR_NOTE}%s …${COLOR_RESET} %b\n" "$UNSTAGED_STAT" "$FILE" "$NUMSTAT" "$LAST_HASH"
+			# Use the DRY function to print file entry
+			echo_file_entry "$UNSTAGED_STAT" "$FILE" "unstaged" "$LAST_HASH" "$NUMSTAT"
 		done
 	fi
 	echo -e "$SEP"
+	
+	# 1.5 Stashed changes section - individual sections for each stash
+	local stashed_entries
+	stashed_entries=$(git stash list --format="%gd:%gs" 2>/dev/null || echo "")
+	if [[ -n "$stashed_entries" ]]; then
+		# Process each stash entry as a separate section
+		while IFS=':' read -r stash_index stash_branch stash_message; do
+			# On branch → branch
+			stash_branch="${stash_branch/On /}"
+			stash_message="${stash_message#"${stash_message%%[![:space:]]*}"}"
+			if [[ -n "$stash_index" ]]; then
+				# Create section header for each stash with formatted index
+				printf "├┄┄ [${COLOR_STRONG}${COLOR_SECTION}%s${COLOR_RESET} ${COLOR_SECTION_ALT}%s${COLOR_RESET}] %s\n" \
+					"$stash_branch" "$stash_index" "$stash_message"
+				
+					# Show stash files if available - similar to unstaged/staged format
+					local stash_files
+					stash_files=$(git stash show --include-untracked --name-status "$stash_index" 2>/dev/null)
+					if [[ -n "$stash_files" ]]; then
+						while IFS= read -r line; do
+							if [[ -n "$line" ]]; then
+								local STAT
+								local FILE
+								local LAST_HASH
+								local NUMSTAT
+								
+								STAT="${line:0:1}"
+								FILE="${line:2}"
+								
+								[[ -z "$FILE" ]] && continue
+								
+								if [[ "$STAT" == "A" ]]; then
+									LAST_HASH=""
+									NUMSTAT=""
+								else
+									# Fetch and format the last hash to touch this file 
+									local RAW_HASH
+									RAW_HASH=$(git log -1 --format="%h" -- "$FILE" 2>/dev/null || echo "")
+									LAST_HASH=$(fmt_hash "$RAW_HASH")
+									# Get numstat for this file
+									NUMSTAT=$(git diff --numstat "$stash_index^..$stash_index" -- "$FILE" 2>/dev/null | awk '{print $1"+"$2"-"}' || echo "")
+								fi
+								
+								echo_file_entry "$STAT" "$FILE" "stashed" "$LAST_HASH" "$NUMSTAT"
+							fi
+							done <<< "$stash_files"
+					fi
+				
+				# Separator between stashes
+				echo -e "${SEP}"
+			fi
+		done <<< "$stashed_entries"
+	fi
+	
 	if [[ $has_staged == true ]]; then
-		render_header "staged" "staged changes"
+		echo_header "staged" "staged changes"
 		for file in "${!staged_files_cache[@]}"; do
 			local STAT="${staged_files_cache[$file]:0:1}"
-			printf "${SEP}│   ${COLOR_OK}%s${COLOR_RESET} %s\n" "$STAT" "$file"
+			echo_file_entry "$STAT" "$file" "staged"
 		done
 		echo -e "${SEP}│"
 	fi
@@ -289,9 +386,9 @@ main() {
 	local CURRENT_GROUP
 	CURRENT_GROUP=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 	if [[ ${#staged_files_cache[@]} -gt 0 ]]; then
-		render_header "stacked" "$CURRENT_GROUP"
+		echo_header "stacked" "$CURRENT_GROUP"
 	else
-		render_header "branch" "$CURRENT_GROUP"
+		echo_header "branch" "$CURRENT_GROUP"
 	fi
 	local TARGET_HASH=""
 	local TARGET_REF=""
@@ -333,7 +430,7 @@ main() {
 			if [[ -n "$NEW_GROUP" && "$NEW_GROUP" != "$CURRENT_GROUP" ]]; then
 				CURRENT_GROUP="$NEW_GROUP"
 				echo -e "${SEP}│"
-				render_header "stacked" "$CURRENT_GROUP"
+				echo_header "stacked" "$CURRENT_GROUP"
 			fi
 		fi
 
