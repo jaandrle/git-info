@@ -91,4 +91,4 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 ## TODO
 - [ ] :zap: ensure all commits listed for unstaged files
 - [x] :bug: wrong UI/UX when local/remote branch are aligned
-- [ ] :zap: `-f` flag for including also files
+- [x] :zap: `-f` flag for including also files

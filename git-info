@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-
 set -euo pipefail
 
 # --- Theme Configuration ---
@@ -15,7 +14,7 @@ readonly COLOR_NOTE='\033[37;2m'      # GRAY
 readonly SEP='┊'
 
 # --- Internal ---
-readonly VERSION="1.1.0"
+readonly VERSION="1.2.0"
 readonly COLOR_RESET='\033[0m'
 readonly COLOR_DIM='\033[2m'
 
@@ -68,41 +67,31 @@ echo_file_entry() { # Prints a file entry with consistent formatting
 	local color=""
 	local status_char=""
 	local hash_display=""
-	local output_format="" # !!! format for printf
 	
-	# Determine status character and color based on context
-	if [[ "$context" == "staged" ]]; then
-		status_char="${status:0:1}"
-		color="${COLOR_OK}"
-		output_format="${SEP}│   ${color}%s${COLOR_RESET} %s\n"
-	elif [[ "$context" == "unstaged" || "$context" == "stashed" ]]; then
-		status_char="${status:0:1}"
-		
-		# Set color based on status
-		case "$status_char" in
-			"M") color="${COLOR_WARN}" ;;
-			"D") color="${COLOR_KO}"    ;;
-			"A") color="${COLOR_OK}"    ;;
-			*)   color="${COLOR_ACCENT}" ;;
-		esac
-		
-		# Set hash display
-		if [[ -n "$hash" ]]; then
-			hash_display="$hash"
-		else
-			hash_display="${COLOR_NOTE}new file${COLOR_RESET}"
-		fi
-		
-		output_format="${SEP}    %s ${color}%s${COLOR_RESET} ${COLOR_NOTE}%s …${COLOR_RESET} %b\n"
+	status_char="${status:0:1}"
+	
+	# Set color based on status
+	case "$status_char" in
+		"M") color="${COLOR_WARN}" ;;
+		"D") color="${COLOR_KO}"    ;;
+		"A") color="${COLOR_OK}"    ;;
+		*)   color="${COLOR_ACCENT}" ;;
+	esac
+	
+	# Set hash display
+	if [[ -n "$hash" ]]; then
+		hash_display="$hash"
+	else
+		hash_display="${COLOR_NOTE}new file${COLOR_RESET}"
 	fi
 	
 	# Print the formatted file entry
-	if [[ "$context" == "staged" ]]; then
-		# shellcheck disable=SC2059 … format in variable
-		printf "$output_format" "$status_char" "$file"
+	if [[ "$context" == "staged" || "$context" == "commit" ]]; then
+		printf "${SEP}│   %s ${color}%s${COLOR_RESET}\n" \
+			"$status_char" "$file"
 	else
-		# shellcheck disable=SC2059 … format in variable
-		printf "$output_format" "$status_char" "$file" "$numstat" "$hash_display"
+		printf "${SEP}    %s ${color}%s${COLOR_RESET} ${COLOR_NOTE}%s …${COLOR_RESET} %b\n" \
+			"$status_char" "$file" "$numstat" "$hash_display"
 	fi
 }
 get_in_progress() { # Detects rebase/merge/cherry-pick/revert in progress and outputs operation type
@@ -219,12 +208,16 @@ main() {
 		echo ""
 		echo "Usage:"
 		echo "  git-info          Show git status"
+		echo "  git-info -f       Show git status with commit files"
 		echo "  git-info help     Show this help message"
 		echo "  git-info --help   Show this help message"
 		echo ""
 		echo "Description:"
 		echo "  A colorful and informative Git status tool that displays unstaged changes,"
 		echo "  staged changes, commit history, and branch information."
+		echo ""
+		echo "Options:"
+		echo "  -f                Show files for each commit in history"
 		echo ""
 		echo "UI Elements:"
 		echo "  ╭┄ [section]     Section headers (branch/staged/unstaged)"
@@ -236,6 +229,20 @@ main() {
 		echo "  Hint:            Contextual hint"
 		exit 0
 	fi
+	
+	# Parse flags
+	local show_files=false
+	while getopts "f" opt; do
+		case $opt in
+			f)
+				show_files=true
+				;;
+			\?)
+				echo "Invalid option: -$OPTARG" >&2
+				exit 1
+				;;
+		esac
+	done
 	
 	# Detect default branch
 	local DEFAULT_BRANCH
@@ -446,6 +453,24 @@ main() {
 		local DOT
 		DOT=$(echo_remote_status "${branch_contains_cache[$HASH]:-}")
 		echo -e "${SEP}$DOT   $(fmt_hash "$HASH") $MSG $(fmt_auth "$AUTHU" "$AUTHT")"
+		
+		# Show commit files if -f flag is provided
+		if [[ "$show_files" == true ]]; then
+			while IFS= read -r line; do
+				if [[ -n "$line" ]]; then
+					local STAT
+					local FILE
+					
+					STAT="${line:0:1}"
+					FILE="${line:2}"
+					
+					[[ -z "$FILE" ]] && continue
+					
+					# Use echo_file_entry function with commit context
+					echo_file_entry "$STAT" "$FILE" "commit"
+				fi
+			done < <(git show --name-status --format="" "$HASH" 2>/dev/null || echo "")
+		fi
 	done < <(git log --format="%h|%D|%s|%ar|%an" HEAD 2>/dev/null || echo "")
 	
 	# 3. Footer Section 
