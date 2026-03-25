@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -eou pipefail
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+git tag -a "v$("$script_dir"/../git-info --version)"

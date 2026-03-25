@@ -23,8 +23,7 @@ fmt_hash() { # formats a 7-char hash with first 4 chars in accent color, last 3 
 	local hash="$1"
 	echo -ne "${COLOR_ACCENT}${hash:0:4}${COLOR_DIM}${hash:4:3}${COLOR_RESET}"
 }
-
-fmt_hashes() { # formats multiple hashes separated by commas
+fmt_hashes() { # formats multiple hashes separated by space
 	local hashes="$1"
 	local result=""
 	local IFS=','
@@ -51,6 +50,31 @@ fmt_auth() {
 	local relative="$2"
 	printf "$COLOR_NOTE(%s · %s)${COLOR_RESET}" \
 		"$user" "$relative"
+}
+echo_usage() {
+	echo "Git status inspired by GitButler CLI."
+	echo ""
+	echo "Usage:"
+	echo "  git-info [options]"
+	echo "  git-info help        Show this help message"
+	echo ""
+	echo "Description:"
+	echo "  A colorful and informative Git status tool that displays unstaged changes,"
+	echo "  staged changes, commit history, and branch information."
+	echo ""
+	echo "Options:"
+	echo "  -f                Show files for each commit in history"
+	echo "  -h, --help        Show this help message"
+	echo "  --version         Show version information"
+	echo ""
+	echo "UI Elements:"
+	echo "  ╭┄ [section]     Section headers (branch/staged/unstaged)"
+	echo "  ●                Commit on remote (green)"
+	echo "  ◐                Commit not on remote yet"
+	echo "  ! operation      In-progress Git operation"
+	echo "  M/A/D            File status (Modified/Added/Deleted)"
+	echo "  ┴ hash [branch]  Footer with target branch info"
+	echo "  Hint:            Contextual hint"
 }
 echo_header() { # branch/section headers
 	local type="$1"
@@ -218,37 +242,15 @@ get_default_branch() { # Detects the default branch from remote
 }
 
 main() {
-	if [[ "${1:-}" == "--version" ]]; then
+	local opt="${1:-}"
+	if [[ "$opt" == "--version" || "$opt" == "-v" ]]; then
 		echo "$VERSION"
 		exit 0
 	fi
-	if [[ "${1:-}" == "help" ]] || [[ "${1:-}" == "--help" ]]; then
-		echo "Git status inspired by GitButler CLI."
-		echo ""
-		echo "Usage:"
-		echo "  git-info          Show git status"
-		echo "  git-info -f       Show git status with commit files"
-		echo "  git-info help     Show this help message"
-		echo "  git-info --help   Show this help message"
-		echo ""
-		echo "Description:"
-		echo "  A colorful and informative Git status tool that displays unstaged changes,"
-		echo "  staged changes, commit history, and branch information."
-		echo ""
-		echo "Options:"
-		echo "  -f                Show files for each commit in history"
-		echo ""
-		echo "UI Elements:"
-		echo "  ╭┄ [section]     Section headers (branch/staged/unstaged)"
-		echo "  ●                Commit on remote (green)"
-		echo "  ◐                Commit not on remote yet"
-		echo "  ! operation      In-progress Git operation"
-		echo "  M/A/D            File status (Modified/Added/Deleted)"
-		echo "  ┴ hash [branch]  Footer with target branch info"
-		echo "  Hint:            Contextual hint"
+	if [[ "$opt" == "help" || "$opt" == "--help" || "$opt" == "-h" ]]; then
+		echo_usage
 		exit 0
 	fi
-	
 	# Parse flags
 	local show_files=false
 	while getopts "f" opt; do
@@ -340,7 +342,6 @@ main() {
 				NUMSTAT=${numstat_cache["$FILE"]:-}
 			fi
 
-			# Use the DRY function to print file entry
 			echo_file_entry "$UNSTAGED_STAT" "$FILE" "unstaged" "$LAST_HASH" "$NUMSTAT"
 		done
 	fi

@@ -5,3 +5,6 @@ This project uses [jaandrle/bs: The simplest possible build system using executa
 
 ### bs/lint
 Lint bash scripts
+
+### bs/release
+Creates git tag
