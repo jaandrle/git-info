@@ -12,7 +12,7 @@ readonly COLOR_NOTE='\033[37;2m'      # GRAY
 readonly SEP='┊'
 
 # --- Internal ---
-readonly VERSION="1.3.0"
+readonly VERSION="1.3.1"
 readonly COLOR_RESET='\033[0m'
 readonly COLOR_DIM='\033[2m'
 
@@ -431,8 +431,10 @@ main() {
 	declare -A branch_contains_cache
 	
 	while IFS='|' read -r HASH REFS MSG AUTHT AUTHU; do
-		if [[ -n "$REFS" ]]; then
-			# Clean refs: remove HEAD pointers and tag prefixes using bash string replacement
+		if [[ -z "$HASH" ]]; then # ?no log history ⇒ no commits
+			continue
+		fi
+		if [[ -n "$REFS" ]]; then # Clean refs: remove HEAD pointers and tag prefixes using bash string replacement
 			local CLEAN_REFS
 			CLEAN_REFS="${REFS//HEAD -> /}"
 			CLEAN_REFS="${CLEAN_REFS//tag: /}"
@@ -505,19 +507,24 @@ main() {
 		TARGET_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "")
 		TARGET_REF="unknown"
 	fi
-	
-	local TARGET_DATE=""
-	local TARGET_MSG=""
-	local TARGET_AUTHOR=""
-	# Fetch target commit info in one call if not already cached
-	if [[ -z "$TARGET_DATE" || -z "$TARGET_MSG" ]]; then
-		local target_info
-		target_info=$(git show -s --format='%ar|%an|%s' "$TARGET_HASH" 2>/dev/null || echo "")
-		IFS='|' read -r TARGET_DATE TARGET_AUTHOR TARGET_MSG <<< "$target_info"
+	if [[ -z "$TARGET_HASH" ]]; then
+		TARGET_REF="unknown remote"
+		echo -e "├╯\n$SEP"
+		echo -e "┴ $(fmt_label accent "$TARGET_REF")"
+	else
+		local TARGET_DATE=""
+		local TARGET_MSG=""
+		local TARGET_AUTHOR=""
+		# Fetch target commit info in one call if not already cached
+		if [[ -z "$TARGET_DATE" || -z "$TARGET_MSG" ]]; then
+			local target_info
+			target_info=$(git show -s --format='%ar|%an|%s' "$TARGET_HASH" 2>/dev/null || echo "")
+			IFS='|' read -r TARGET_DATE TARGET_AUTHOR TARGET_MSG <<< "$target_info"
+		fi
+		
+		echo -e "├╯\n$SEP"
+		echo -e "┴ $(fmt_hash "$TARGET_HASH") $(fmt_label accent "$TARGET_REF") ${TARGET_MSG} $(fmt_auth "$TARGET_AUTHOR" "$TARGET_DATE")"
 	fi
-	
-	echo -e "├╯\n$SEP"
-	echo -e "┴ $(fmt_hash "$TARGET_HASH") $(fmt_label accent "$TARGET_REF") ${TARGET_MSG} $(fmt_auth "$TARGET_AUTHOR" "$TARGET_DATE")"
 	
 	local HINT=""
 	local IN_PROGRESS_OP
@@ -534,6 +541,8 @@ main() {
 			HINT="run \`git commit\` to commit staged changes"
 		elif $has_unstaged; then
 			HINT="run \`git diff\` to see changes, \`git add\` to stage"
+		elif [[ -z "$TARGET_HASH" ]]; then # ≡ no commits, no remote
+			HINT="run \`git add\` to stage files (you may also need to set a remote: \`git remote add origin <url>\`)"
 		fi
 	fi
 	if [[ -n "$HINT" ]]; then
