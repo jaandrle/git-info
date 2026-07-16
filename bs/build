@@ -1,8 +1,39 @@
 #!/usr/bin/env bash
-set -eo pipefail # this can be harmful
+. bs/.common || {
+	echo 'Please run this script from the project root directory' >&2;
+	exit 1;
+}
 
-declare -A INCLUDED
-declare -A STACK
+# depends on
+declare -r src='src/index.bash'
+declare -r dist='git-info'
+declare -r lint='bs/lint'
+
+# internal
+declare -r title="compiling $src to $dist"
+
+usage(){
+	echoReadmeInfo
+	echo
+}
+help(){
+	if ! isHelp "${@}"; then return 0; fi
+	usage
+	exit 0
+}
+error() {
+	local -r message="$1"
+	echo "✗ $title" >&2
+	echo " - $message" >&2
+	exit 1
+}
+isForce() {
+	if [[ "$1" == '-f' || "$1" == '--force' ]]; then
+		true
+	else
+		false
+	fi
+}
 
 resolve_path() {
 	local current_dir="$1"
@@ -14,47 +45,48 @@ resolve_path() {
 		realpath "$current_dir/$file"
 	fi
 }
-
+declare -A INCLUDED STACK
 compile() {
 	local file="$1"
-
 	file="$(realpath "$file")"
-
 	# Prevent duplicate inclusion
 	if [[ -n "${INCLUDED[$file]:-}" ]]; then
 		return
 	fi
-
 	# Detect circular imports
 	if [[ -n "${STACK[$file]:-}" ]]; then
-		echo "Circular dependency detected: $file" >&2
-		exit 1
+		error "circular dependency detected: $file"
 	fi
-
 	STACK["$file"]=1
 
-	local dir
+	local dir line
 	dir="$(dirname "$file")"
-
 	while IFS= read -r line || [[ -n "$line" ]]; do
 		# Match:
 		# source foo.sh
 		# . foo.sh
 		if [[ "$line" =~ ^[[:space:]]*(source|\.)[[:space:]]+([^[:space:]#]+) ]]; then
 			local include="${BASH_REMATCH[2]}"
-
 			compile "$(resolve_path "$dir" "$include")"
 			continue
 		fi
-
 		echo "$line"
-
 	done < "$file"
 
 	INCLUDED["$file"]=1
-	unset STACK["$file"]
+	unset "STACK[$file]"
 }
 
-compile src/index.bash > ./git-info
-chmod +x ./git-info
-bs/lint
+main(){
+	help "${@}"
+	if ! isForce "${1-}"; then
+		set -eo pipefail # this can be harmful
+	fi
+	"$lint"
+	echo -ne "… $title\r"
+	compile "$src" > "$dist"
+	chmod +x "$dist"
+	echo "✓ $title"
+}
+
+main "${@}"

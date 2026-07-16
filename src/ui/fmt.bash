@@ -1,5 +1,4 @@
 source ../core/consts.bash # COLOR_ACCENT, COLOR_DIM, COLOR_NOTE, COLOR_RESET, COLOR_SECTION, COLOR_SECTION_ALT, COLOR_STRONG
-## UI parts (formatting)
 fmt_hash() { # formats a 7-char hash with first 4 chars in accent color, last 3 dimmed 
 	local -r hash="$1"
 	echo -ne "${COLOR_ACCENT}${hash:0:4}${COLOR_DIM}${hash:4:3}${COLOR_RESET}"

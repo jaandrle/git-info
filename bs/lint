@@ -1,2 +1,24 @@
-#/bin/env bash
-shellcheck git-info
+#!/bin/env bash
+. bs/.common || {
+	echo 'Please run this script from the project root directory' >&2;
+	exit 1;
+}
+# depends on
+declare -r src='src/index.bash'
+
+set -e
+shopt -s globstar nullglob
+echo -ne "… bash -n “src/*”\r"
+for script in src/*.bash src/**/*.bash; do
+	bash -n "$script"
+done
+echo "✓ bash -n “src/*”"
+
+echo -ne "… shellcheck $src …\r"
+shellcheck "$src" \
+	-xa \
+	-P src \
+	-P src/components \
+	-P src/core \
+	-P src/ui
+echo "✓ shellcheck $src …"

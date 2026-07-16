@@ -1,18 +1,21 @@
-source ../../core/consts.bash # COLOR_RESET, COLOR_STRONG, COLOR_SECTION, COLOR_SECTION_ALT
-source ../echo/echo_file_entry.bash
-echoComponent_stashed() {
+source ../core/consts.bash # COLOR_RESET, COLOR_STRONG, COLOR_SECTION, COLOR_SECTION_ALT, SEP
+source ../ui/echo_file_entry.bash
+component_stashed() {
 	local -r _default_branch="$1"
 	local stashed_entries
 	stashed_entries=$(git stash list --format='%gd:%gs' 2>/dev/null || echo '')
 	if [[ -z "$stashed_entries" ]]; then
 		return
 	fi
-	local stash_index stash_branch stash_message
+	local stash_index stash_branch stash_message count=0
 	while IFS=':' read -r stash_index stash_branch stash_message; do
 		# On branch → branch
 		stash_branch="${stash_branch/On /}"
 		stash_message="${stash_message#"${stash_message%%[![:space:]]*}"}"
 		if [[ -n "$stash_index" ]]; then
+			if (( count++ == 0 )); then
+				echo -e "${SEP}"
+			fi
 			# Create section header for each stash with formatted index
 			printf "├┄┄ [${COLOR_STRONG}${COLOR_SECTION}%s${COLOR_RESET} ${COLOR_SECTION_ALT}%s${COLOR_RESET}] %s\n" \
 				"$stash_branch" "$stash_index" "$stash_message"
@@ -50,9 +53,6 @@ echoComponent_stashed() {
 						fi
 						done <<< "$stash_files"
 				fi
-			
-			# Separator between stashes
-			echo -e "${SEP}"
 		fi
 	done <<< "$stashed_entries"
 }

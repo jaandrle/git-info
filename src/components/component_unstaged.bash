@@ -1,6 +1,7 @@
-source ../../core/consts.bash # COLOR_RESET
-source ../echo/echo_file_entry.bash
-echoComponent_unstaged() {
+source ../core/consts.bash # COLOR_RESET
+source ../ui/echo_file_entry.bash
+source ../ui/echo_header.bash
+component_unstaged() {
 	echo_header 'unstaged' 'unstaged changes'
 	local -r _has_unstaged="$1"
 	if [[ $_has_unstaged == false ]]; then
@@ -8,20 +9,16 @@ echoComponent_unstaged() {
 		echo -e "${SEP}    ${COLOR_EMPHASIS}no changes${COLOR_RESET}"
 	fi
 	local -r _default_branch="$2"
-	local -n _numstat_cache="$3"
+	local -n __numstat_cache="$3"
 	local line
 	git status --short --no-branch 2>/dev/null | while IFS= read -r line; do
-		local STAT
-		local FILE
-		local LAST_HASH
-		local NUMSTAT
-		
-		STAT="${line:0:2}"
-		FILE="${line:3}"
+		local STAT="${line:0:2}"
+		local FILE="${line:3}"
 
 		[[ -z "$FILE" ]] && continue
 		[[ "${STAT:1:1}" == " " ]] && continue
 
+		local LAST_HASH NUMSTAT
 		local UNSTAGED_STAT="${STAT:1:1}"
 		if [[ "$STAT" == '?' || "$STAT" == 'A' || "$UNSTAGED_STAT" == '?' || "$UNSTAGED_STAT" == 'A' ]]; then
 			LAST_HASH=''
@@ -33,9 +30,10 @@ echoComponent_unstaged() {
 			RAW_HASHES=$(git log --format='%h' "$_default_branch"..HEAD -- "$FILE" 2>/dev/null | tr '\n' ',' | sed 's/,$//')
 			LAST_HASH="$RAW_HASHES"
 			# Get numstat from cache
-			NUMSTAT=${_numstat_cache["$FILE"]:-}
+			NUMSTAT=${__numstat_cache["$FILE"]:-}
 		fi
 
 		echo_file_entry "$UNSTAGED_STAT" "$FILE" 'unstaged' "$LAST_HASH" "$NUMSTAT"
 	done
+	echo -e "$SEP"
 }

@@ -11,6 +11,6 @@ readonly COLOR_NOTE='\033[37;2m'      # GRAY
 readonly SEP='┊'
 
 ## Internal Constants
-readonly VERSION="1.3.1"
+readonly VERSION="1.4.0"
 readonly COLOR_RESET='\033[0m'
 readonly COLOR_DIM='\033[2m'

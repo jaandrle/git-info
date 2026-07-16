@@ -1,4 +1,4 @@
-source ../fmt.bash # fmt_label
+source ./fmt.bash # fmt_label
 echo_header() { # branch/section headers
 	local type="$1"
 	local label="$2"

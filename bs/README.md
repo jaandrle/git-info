@@ -3,6 +3,9 @@ This project uses [jaandrle/bs: The simplest possible build system using executa
 
 ## Available executables
 
+### bs/build
+This build project. Meaning, it concat all scripts into a single executable (uses bashs’ `source xyz.bash` syntax).
+
 ### bs/lint
 Lint bash scripts
 

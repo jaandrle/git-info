@@ -1,4 +1,4 @@
-source ../../core/consts.bash # COLOR_OK, COLOR_RESET
+source ../core/consts.bash # COLOR_OK, COLOR_RESET
 echo_remote_status() { # Checks remote status for the commit dot 
 	local -r status="${1:-}" # 1 = on remote, 0 = not on remote
 	if [[ "$status" == '1' ]]; then

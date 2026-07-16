@@ -13,10 +13,153 @@ readonly COLOR_NOTE='\033[37;2m'      # GRAY
 readonly SEP='┊'
 
 ## Internal Constants
-readonly VERSION="1.3.1"
+readonly VERSION="1.4.0"
 readonly COLOR_RESET='\033[0m'
 readonly COLOR_DIM='\033[2m'
-## UI parts (formatting)
+
+## Body (`main` function call)
+get_defaultBranch() { # Detects the default branch from remote
+	local default_branch=''
+	local remote='origin'
+	
+	# Method 1: Check local config for default branch (fast, no network)
+	default_branch=$(git config "remote.$remote.branch.default" 2>/dev/null || true)
+	if [[ -n "$default_branch" ]]; then
+		echo "$remote/$default_branch"
+		return
+	fi
+	
+	# Method 2: Try to get from git symbolic-ref (very fast)
+	local head_ref
+	head_ref=$(git symbolic-ref "refs/remotes/$remote/HEAD" 2>/dev/null || true)
+	if [[ -n "$head_ref" ]]; then
+		echo "${head_ref#refs/remotes/}"
+		return
+	fi
+	
+	# Method 3: Fallback to common default branches
+	local common_branches=("main" "master" "develop" "trunk")
+	for branch in "${common_branches[@]}"; do
+		if git show-ref --verify --quiet "refs/remotes/$remote/$branch" 2>/dev/null; then
+			echo "$remote/$branch"
+			return
+		fi
+	done
+	
+	# Method 4: Ultimate fallback
+	echo "$remote/main"
+}
+is_gitRepo() {
+	git rev-parse --show-toplevel > /dev/null 2>&1;
+	local -r result=$?
+	if [[ $result != 0 ]]; then
+		>&2 echo 'Not a git repository'
+		exit $result
+	fi
+}
+component_usage() {
+	local usage
+	read -r -d '' usage <<-'USAGE'
+		Git status inspired by GitButler CLI.
+		
+		Usage:
+		  git-info [options]
+		  git-info help        Show this help message
+		
+		Description:
+		  A colorful and informative Git status tool that displays unstaged changes,
+		  staged changes, commit history, and branch information.
+		
+		Options:
+		  -f                Show files for each commit in history
+		  -h, --help        Show this help message
+		  --version         Show version information
+		
+		UI Elements:
+		  ╭┄ [section]     Section headers (branch/staged/unstaged)
+		  ●                Commit on remote (green)
+		  ◐                Commit not on remote yet
+		  ! operation      In-progress Git operation
+		  M/A/D            File status (Modified/Added/Deleted)
+		  ┴ hash [branch]  Footer with target branch info
+		  Hint:            Contextual hint
+	USAGE
+	echo "$usage"
+}
+process_cliStart(){
+	local -n _show_files=$1
+	shift
+	local opt="${1:-}"
+	if [[ "$opt" == "--version" || "$opt" == "-v" ]]; then
+		echo "$VERSION"
+		exit 0
+	fi
+	if [[ "$opt" == "help" || "$opt" == "--help" || "$opt" == "-h" ]]; then
+		component_usage
+		exit 0
+	fi
+	is_gitRepo
+	# Parse flags
+	while getopts "f" opt; do
+		case $opt in
+			f)
+				_show_files=true
+				;;
+			?)
+				[[ -n "$OPTARG" ]] && \
+					echo "Invalid option: -${OPTARG}." >&2
+				exit 1
+				;;
+		esac
+	done
+}
+fetch_numstat() {
+	# shellcheck disable=SC2178
+	local -n out=$1
+	out=()
+	local line
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		local additions='' deletions='' file=''
+		read -r additions deletions file <<< "$line"
+		[[ -z "$file" ]] && continue
+		# shellcheck disable=SC2034
+		out["$file"]="${additions}+${deletions}-"
+	done < <(git diff --numstat 2>/dev/null)
+}
+fetch_staged() {
+	# shellcheck disable=SC2178
+	local -n out=$1
+	out=()
+	local stat file
+	while IFS=$'\t' read -r stat file || [[ -n "$stat" ]]; do
+		[[ -z "$file" ]] && continue
+		# shellcheck disable=SC2034
+		out["$file"]="$stat"
+	done < <(git diff --cached --name-status 2>/dev/null)
+}
+cache_files() {
+	local -n __numstat_cache=$1
+	fetch_numstat "$1"
+	local -n __staged_files_cache=$2
+	fetch_staged "$2"
+	local -n _has_unstaged=$3
+	local -n _has_staged=$4
+	if [[ -n "${_numstat_cache:+x}" || -n "${__staged_files_cache:+x}" ]]; then
+		if [[ ${#_numstat_cache[@]} -gt 0 ]]; then
+			_has_unstaged=true
+		fi
+		if [[ ${#__staged_files_cache[@]} -gt 0 ]]; then
+			_has_staged=true
+		fi
+	else
+		if git status --short --no-branch 2>/dev/null | grep -q .; then
+			_has_unstaged=true
+		fi
+		if git diff --cached --name-status 2>/dev/null | grep -q .; then
+			_has_staged=true
+		fi
+	fi
+}
 fmt_hash() { # formats a 7-char hash with first 4 chars in accent color, last 3 dimmed 
 	local -r hash="$1"
 	echo -ne "${COLOR_ACCENT}${hash:0:4}${COLOR_DIM}${hash:4:3}${COLOR_RESET}"
@@ -49,35 +192,71 @@ fmt_auth() {
 	printf "$COLOR_NOTE(%s · %s)${COLOR_RESET}" \
 		"$user" "$relative"
 }
-## UI Elements
-echo_usage() {
-	local usage
-	read -r -d '' usage <<-'USAGE'
-		Git status inspired by GitButler CLI.
+component_branchRoot(){
+	local TARGET_HASH=$1
+	local TARGET_REF=$2
+	if [[ -z "$TARGET_HASH" ]]; then
+		TARGET_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo '')
+		TARGET_REF='unknown'
+	fi
+	
+	local line
+	if [[ -z "$TARGET_HASH" ]]; then
+		TARGET_REF='unknown remote'
+		line="$(fmt_label accent "$TARGET_REF")"
+	else
+		local TARGET_DATE=''
+		local TARGET_MSG=''
+		local TARGET_AUTHOR=''
+		# Fetch target commit info in one call if not already cached
+		if [[ -z "$TARGET_DATE" || -z "$TARGET_MSG" ]]; then
+			local target_info
+			target_info=$(git show -s --format='%ar|%an|%s' "$TARGET_HASH" 2>/dev/null || echo '')
+			IFS='|' read -r TARGET_DATE TARGET_AUTHOR TARGET_MSG <<< "$target_info"
+		fi
 		
-		Usage:
-		  git-info [options]
-		  git-info help        Show this help message
-		
-		Description:
-		  A colorful and informative Git status tool that displays unstaged changes,
-		  staged changes, commit history, and branch information.
-		
-		Options:
-		  -f                Show files for each commit in history
-		  -h, --help        Show this help message
-		  --version         Show version information
-		
-		UI Elements:
-		  ╭┄ [section]     Section headers (branch/staged/unstaged)
-		  ●                Commit on remote (green)
-		  ◐                Commit not on remote yet
-		  ! operation      In-progress Git operation
-		  M/A/D            File status (Modified/Added/Deleted)
-		  ┴ hash [branch]  Footer with target branch info
-		  Hint:            Contextual hint
-	USAGE
-	echo "$usage"
+		line="$(fmt_hash "$TARGET_HASH") $(fmt_label accent "$TARGET_REF") ${TARGET_MSG} $(fmt_auth "$TARGET_AUTHOR" "$TARGET_DATE")"
+	fi
+	echo -e "├╯"
+	echo -e "┴ $line"
+}
+echo_file_entry() { # Prints a file entry with consistent formatting
+	local status="$1"
+	local file="$2"
+	local context="$3" # unstaged, staged, or stashed
+	local hash="${4:-}"    # Optional: last commit hash (or multiple hashes)
+	local numstat="${5:-}" # Optional: numstat string
+	
+	local color=''
+	local status_char=''
+	local hash_display=''
+	
+	status_char="${status:0:1}"
+	
+	case "$status_char" in
+		'M') color="${COLOR_WARN}" ;;
+		'D') color="${COLOR_KO}"    ;;
+		'A') color="${COLOR_OK}"    ;;
+		*)   color="${COLOR_ACCENT}" ;;
+	esac
+	
+	if [[ -n "$hash" ]]; then
+		if [[ "$hash" == *','* ]]; then
+			hash_display="$(fmt_hashes "$hash")"
+		else
+			hash_display="$(fmt_hash "$hash")"
+		fi
+	else
+		hash_display="${COLOR_NOTE}new file${COLOR_RESET}"
+	fi
+	
+	if [[ "$context" == 'staged' || "$context" == 'commit' ]]; then
+		printf "${SEP}│   %s ${color}%s${COLOR_RESET}\n" \
+			"$status_char" "$file"
+	else
+		printf "${SEP}    %s ${color}%s${COLOR_RESET} ${COLOR_NOTE}%s …${COLOR_RESET} %b\n" \
+			"$status_char" "$file" "$numstat" "$hash_display"
+	fi
 }
 echo_header() { # branch/section headers
 	local type="$1"
@@ -97,48 +276,95 @@ echo_remote_status() { # Checks remote status for the commit dot
 		echo -e "${COLOR_RESET}◐${COLOR_RESET}"
 	fi
 }
-echo_file_entry() { # Prints a file entry with consistent formatting
-	local status="$1"
-	local file="$2"
-	local context="$3" # unstaged, staged, or stashed
-	local hash="${4:-}"    # Optional: last commit hash (or multiple hashes)
-	local numstat="${5:-}" # Optional: numstat string
+component_branches() {
+	local -r DEFAULT_BRANCH=$1
+	local -r show_files=$2
+	local -r staged_files_count=$3
+	local -n _target_hash=$4
+	local -n _target_ref=$5
+	# Dynamic Commit Groups
+	local current_group
+	current_group=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')
+	if [[ "$staged_files_count" -gt 0 ]]; then
+		echo_header 'stacked' "$current_group"
+	else
+		echo_header 'branch' "$current_group"
+	fi
 	
-	local color=''
-	local status_char=''
-	local hash_display=''
-	
-	status_char="${status:0:1}"
-	
-	# Set color based on status
-	case "$status_char" in
-		'M') color="${COLOR_WARN}" ;;
-		'D') color="${COLOR_KO}"    ;;
-		'A') color="${COLOR_OK}"    ;;
-		*)   color="${COLOR_ACCENT}" ;;
-	esac
-	
-	# Set hash display
-	if [[ -n "$hash" ]]; then
-		if [[ "$hash" == *','* ]]; then
-			# Multiple hashes - use fmt_hashes
-			hash_display="$(fmt_hashes "$hash")"
-		else
-			# Single hash - use fmt_hash
-			hash_display="$(fmt_hash "$hash")"
+	# Cache branch contains checks
+	local -A branch_contains_cache
+	local HASH REFS MSG AUTHT AUTHU
+	while IFS='|' read -r HASH REFS MSG AUTHT AUTHU; do
+		if [[ -z "$HASH" ]]; then # ?no log history ⇒ no commits
+			continue
 		fi
-	else
-		hash_display="${COLOR_NOTE}new file${COLOR_RESET}"
-	fi
-	
-	# Print the formatted file entry
-	if [[ "$context" == 'staged' || "$context" == 'commit' ]]; then
-		printf "${SEP}│   %s ${color}%s${COLOR_RESET}\n" \
-			"$status_char" "$file"
-	else
-		printf "${SEP}    %s ${color}%s${COLOR_RESET} ${COLOR_NOTE}%s …${COLOR_RESET} %b\n" \
-			"$status_char" "$file" "$numstat" "$hash_display"
-	fi
+		if [[ -n "$REFS" ]]; then # Clean refs: remove HEAD pointers and tag prefixes using bash string replacement
+			local CLEAN_REFS
+			CLEAN_REFS="${REFS//HEAD -> /}"
+			CLEAN_REFS="${CLEAN_REFS//tag: /}"
+
+			# Check if we hit the target/upstream branch
+			if [[ "$CLEAN_REFS" == *"$DEFAULT_BRANCH"* ]]; then
+				_target_hash="$HASH"
+				# Extract target ref
+				IFS=',' read -ra REFS_ARRAY <<< "$CLEAN_REFS"
+				for ref in "${REFS_ARRAY[@]}"; do
+					ref="${ref#"${ref%%[![:space:]]*}"}"  # trim leading whitespace
+					if [[ "$ref" == "$DEFAULT_BRANCH" ]]; then
+						_target_ref="$ref"
+						break 2
+					fi
+				done
+			fi
+
+			# Detect a new local branch label (Stacked branches) using bash array
+			local NEW_GROUP=''
+			IFS=',' read -ra REFS_ARRAY <<< "$CLEAN_REFS"
+			for ref in "${REFS_ARRAY[@]}"; do
+				ref="${ref#"${ref%%[![:space:]]*}"}"  # trim leading whitespace
+				if [[ "$ref" != *"origin/"* && "$ref" != *"gitbutler/"* && "$ref" != "$current_group" ]]; then
+					NEW_GROUP="$ref"
+					break
+				fi
+				done
+			if [[ -n "$NEW_GROUP" && "$NEW_GROUP" != "$current_group" ]]; then
+				current_group="$NEW_GROUP"
+				echo -e "${SEP}│"
+				echo_header 'stacked' "$current_group"
+			fi
+		fi
+
+		# Cache branch contains check result
+		if [[ -z "${branch_contains_cache[$HASH]:-}" ]]; then
+			if git branch -r --contains "$HASH" 2>/dev/null | grep -q 'origin/'; then
+				branch_contains_cache["$HASH"]='1'
+			else
+				branch_contains_cache["$HASH"]='0'
+			fi
+		fi
+
+		local DOT
+		DOT=$(echo_remote_status "${branch_contains_cache[$HASH]:-}")
+		echo -e "${SEP}$DOT   $(fmt_hash "$HASH") $MSG $(fmt_auth "$AUTHU" "$AUTHT")"
+		
+		# Show commit files if -f flag is provided
+		if [[ "$show_files" == true ]]; then
+			while IFS= read -r line; do
+				if [[ -n "$line" ]]; then
+					local STAT
+					local FILE
+					
+					STAT="${line:0:1}"
+					FILE="${line:2}"
+					
+					[[ -z "$FILE" ]] && continue
+					
+					# Use echo_file_entry function with commit context
+					echo_file_entry "$STAT" "$FILE" 'commit'
+				fi
+			done < <(git show --name-status --format='' "$HASH" 2>/dev/null || echo '')
+		fi
+	done < <(git log --format='%h|%D|%s|%ar|%an' HEAD 2>/dev/null || echo '')
 }
 get_inProgress() { # Detects rebase/merge/cherry-pick/revert in progress and outputs operation type
 	local state_dir=''
@@ -163,7 +389,36 @@ get_inProgress() { # Detects rebase/merge/cherry-pick/revert in progress and out
 
 	echo "$operation"
 }
-echoComponent_inProgress() { # Renders rebase/merge/cherry-pick/revert in progress
+component_hint() {
+	local -r has_staged="$1"
+	local -r has_unstaged="$2"
+	local -r TARGET_HASH="$3"
+	local HINT=''
+	local IN_PROGRESS_OP
+	IN_PROGRESS_OP=$(get_inProgress)
+	if [[ -n "$IN_PROGRESS_OP" ]]; then
+		# shellcheck disable=SC2016
+		case "$IN_PROGRESS_OP" in
+			'rebase')      HINT='resolve conflicts, `git add`, then `git rebase --continue`' ;;
+			'merge')       HINT='resolve conflicts, `git add`, then `git commit`' ;;
+			'cherry-pick') HINT='resolve conflicts, `git add`, then `git cherry-pick --continue`' ;;
+			'revert')      HINT='resolve conflicts, `git add`, then `git revert --continue`' ;;
+		esac
+	else
+		# shellcheck disable=SC2016
+		if $has_staged; then
+			HINT='run `git commit` to commit staged changes'
+		elif $has_unstaged; then
+			HINT='run `git diff` to see changes, `git add` to stage'
+		elif [[ -z "$TARGET_HASH" ]]; then # ≡ no commits, no remote
+			HINT='run `git add` to stage files (you may also need to set a remote: `git remote add origin <url>`)'
+		fi
+	fi
+	if [[ -n "$HINT" ]]; then
+		echo -e "\n\e[37m${COLOR_NOTE}Hint: ${HINT}${COLOR_RESET}"
+	fi
+}
+component_inProgress() { # Renders rebase/merge/cherry-pick/revert in progress
 	local state_dir=''
 	local operation=''
 	local step=''
@@ -212,117 +467,35 @@ echoComponent_inProgress() { # Renders rebase/merge/cherry-pick/revert in progre
 	fi
 	echo
 }
-get_defaultBranch() { # Detects the default branch from remote
-	local default_branch=''
-	local remote='origin'
-	
-	# Method 1: Check local config for default branch (fast, no network)
-	default_branch=$(git config "remote.$remote.branch.default" 2>/dev/null || true)
-	if [[ -n "$default_branch" ]]; then
-		echo "$remote/$default_branch"
+component_staged(){
+	local -r has_staged="$1"
+	if [[ $has_staged == false ]]; then
 		return
 	fi
-	
-	# Method 2: Try to get from git symbolic-ref (very fast)
-	local head_ref
-	head_ref=$(git symbolic-ref "refs/remotes/$remote/HEAD" 2>/dev/null || true)
-	if [[ -n "$head_ref" ]]; then
-		echo "${head_ref#refs/remotes/}"
-		return
-	fi
-	
-	# Method 3: Fallback to common default branches
-	local common_branches=("main" "master" "develop" "trunk")
-	for branch in "${common_branches[@]}"; do
-		if git show-ref --verify --quiet "refs/remotes/$remote/$branch" 2>/dev/null; then
-			echo "$remote/$branch"
-			return
-		fi
+	local -n __staged_files_cache=$2
+	echo_header 'staged' 'staged changes'
+	for file in "${!__staged_files_cache[@]}"; do
+		local STAT="${__staged_files_cache[$file]:0:1}"
+		echo_file_entry "$STAT" "$file" 'staged'
 	done
-	
-	# Method 4: Ultimate fallback
-	echo "$remote/main"
+	echo -e "${SEP}│"
 }
-is_gitRepo() {
-	git rev-parse --show-toplevel > /dev/null 2>&1;
-	local -r result=$?
-	if [[ $result != 0 ]]; then
-		>&2 echo 'Not a git repository'
-		exit $result
-	fi
-}
-fetch_numstat() {
-	local -n out="$1"
-	out=()
-	local line
-	while IFS= read -r line || [[ -n "$line" ]]; do
-		local additions='' deletions='' file=''
-		read -r additions deletions file <<< "$line"
-		[[ -z "$file" ]] && continue
-		out["$file"]="${additions}+${deletions}-"
-	done < <(git diff --numstat 2>/dev/null)
-}
-fetch_staged() {
-	local -n out="$1"
-	out=()
-	local stat file
-	while IFS=$'\t' read -r stat file || [[ -n "$stat" ]]; do
-		[[ -z "$file" ]] && continue
-		out["$file"]="$stat"
-	done < <(git diff --cached --name-status 2>/dev/null)
-}
-echoComponent_unstaged() {
-	echo_header 'unstaged' 'unstaged changes'
-	local -r _has_unstaged="$1"
-	if [[ $_has_unstaged == false ]]; then
-		local COLOR_EMPHASIS="\e[3m"
-		echo -e "${SEP}    ${COLOR_EMPHASIS}no changes${COLOR_RESET}"
-	fi
-	local -r _default_branch="$2"
-	local -n _numstat_cache="$3"
-	local line
-	git status --short --no-branch 2>/dev/null | while IFS= read -r line; do
-		local STAT
-		local FILE
-		local LAST_HASH
-		local NUMSTAT
-		
-		STAT="${line:0:2}"
-		FILE="${line:3}"
-
-		[[ -z "$FILE" ]] && continue
-		[[ "${STAT:1:1}" == " " ]] && continue
-
-		local UNSTAGED_STAT="${STAT:1:1}"
-		if [[ "$STAT" == '?' || "$STAT" == 'A' || "$UNSTAGED_STAT" == '?' || "$UNSTAGED_STAT" == 'A' ]]; then
-			LAST_HASH=''
-			UNSTAGED_STAT='A'
-			NUMSTAT=''
-		else
-			# Fetch and format all hashes that touched this file, limited to DEFAULT_BRANCH
-			local RAW_HASHES
-			RAW_HASHES=$(git log --format='%h' "$_default_branch"..HEAD -- "$FILE" 2>/dev/null | tr '\n' ',' | sed 's/,$//')
-			LAST_HASH="$RAW_HASHES"
-			# Get numstat from cache
-			NUMSTAT=${_numstat_cache["$FILE"]:-}
-		fi
-
-		echo_file_entry "$UNSTAGED_STAT" "$FILE" 'unstaged' "$LAST_HASH" "$NUMSTAT"
-	done
-}
-echoComponent_stashed() {
+component_stashed() {
 	local -r _default_branch="$1"
 	local stashed_entries
 	stashed_entries=$(git stash list --format='%gd:%gs' 2>/dev/null || echo '')
 	if [[ -z "$stashed_entries" ]]; then
 		return
 	fi
-	local stash_index stash_branch stash_message
+	local stash_index stash_branch stash_message count=0
 	while IFS=':' read -r stash_index stash_branch stash_message; do
 		# On branch → branch
 		stash_branch="${stash_branch/On /}"
 		stash_message="${stash_message#"${stash_message%%[![:space:]]*}"}"
 		if [[ -n "$stash_index" ]]; then
+			if (( count++ == 0 )); then
+				echo -e "${SEP}"
+			fi
 			# Create section header for each stash with formatted index
 			printf "├┄┄ [${COLOR_STRONG}${COLOR_SECTION}%s${COLOR_RESET} ${COLOR_SECTION_ALT}%s${COLOR_RESET}] %s\n" \
 				"$stash_branch" "$stash_index" "$stash_message"
@@ -360,211 +533,63 @@ echoComponent_stashed() {
 						fi
 						done <<< "$stash_files"
 				fi
-			
-			# Separator between stashes
-			echo -e "${SEP}"
 		fi
 	done <<< "$stashed_entries"
 }
-main() {
-	local opt="${1:-}"
-	if [[ "$opt" == "--version" || "$opt" == "-v" ]]; then
-		echo "$VERSION"
-		exit 0
+component_unstaged() {
+	echo_header 'unstaged' 'unstaged changes'
+	local -r _has_unstaged="$1"
+	if [[ $_has_unstaged == false ]]; then
+		local COLOR_EMPHASIS="\e[3m"
+		echo -e "${SEP}    ${COLOR_EMPHASIS}no changes${COLOR_RESET}"
 	fi
-	if [[ "$opt" == "help" || "$opt" == "--help" || "$opt" == "-h" ]]; then
-		echo_usage
-		exit 0
-	fi
-	is_gitRepo
-	# Parse flags
-	local show_files=false
-	while getopts "f" opt; do
-		case $opt in
-			f)
-				show_files=true
-				;;
-			\?)
-				echo "Invalid option: -$OPTARG" >&2
-				exit 1
-				;;
-		esac
+	local -r _default_branch="$2"
+	local -n __numstat_cache="$3"
+	local line
+	git status --short --no-branch 2>/dev/null | while IFS= read -r line; do
+		local STAT="${line:0:2}"
+		local FILE="${line:3}"
+
+		[[ -z "$FILE" ]] && continue
+		[[ "${STAT:1:1}" == " " ]] && continue
+
+		local LAST_HASH NUMSTAT
+		local UNSTAGED_STAT="${STAT:1:1}"
+		if [[ "$STAT" == '?' || "$STAT" == 'A' || "$UNSTAGED_STAT" == '?' || "$UNSTAGED_STAT" == 'A' ]]; then
+			LAST_HASH=''
+			UNSTAGED_STAT='A'
+			NUMSTAT=''
+		else
+			# Fetch and format all hashes that touched this file, limited to DEFAULT_BRANCH
+			local RAW_HASHES
+			RAW_HASHES=$(git log --format='%h' "$_default_branch"..HEAD -- "$FILE" 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+			LAST_HASH="$RAW_HASHES"
+			# Get numstat from cache
+			NUMSTAT=${__numstat_cache["$FILE"]:-}
+		fi
+
+		echo_file_entry "$UNSTAGED_STAT" "$FILE" 'unstaged' "$LAST_HASH" "$NUMSTAT"
 	done
-	
-	# Detect default branch
-	local DEFAULT_BRANCH
-	DEFAULT_BRANCH=$(get_defaultBranch)
-	
-	# Pre-fetch numstat and staged files
-	declare -A numstat_cache staged_files_cache
-	fetch_numstat numstat_cache
-	fetch_staged staged_files_cache
-	
-	local has_unstaged=false
-	local has_staged=false
-	if [[ -n "${numstat_cache:+x}" || -n "${staged_files_cache:+x}" ]]; then
-		if [[ ${#numstat_cache[@]} -gt 0 ]]; then
-			has_unstaged=true
-		fi
-		if [[ ${#staged_files_cache[@]} -gt 0 ]]; then
-			has_staged=true
-		fi
-	else
-		if git status --short --no-branch 2>/dev/null | grep -q .; then
-			has_unstaged=true
-		fi
-		if git diff --cached --name-status 2>/dev/null | grep -q .; then
-			has_staged=true
-		fi
-	fi
-	
-	echoComponent_inProgress
-	echoComponent_unstaged "$has_unstaged" "$DEFAULT_BRANCH" numstat_cache
 	echo -e "$SEP"
-	echoComponent_stashed "$DEFAULT_BRANCH"
-	
-	if [[ $has_staged == true ]]; then
-		echo_header 'staged' 'staged changes'
-		for file in "${!staged_files_cache[@]}"; do
-			local STAT="${staged_files_cache[$file]:0:1}"
-			echo_file_entry "$STAT" "$file" 'staged'
-		done
-		echo -e "${SEP}│"
-	fi
-	
-	# Dynamic Commit Groups
-	local CURRENT_GROUP
-	CURRENT_GROUP=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')
-	if [[ ${#staged_files_cache[@]} -gt 0 ]]; then
-		echo_header 'stacked' "$CURRENT_GROUP"
-	else
-		echo_header 'branch' "$CURRENT_GROUP"
-	fi
-	local TARGET_HASH=''
-	local TARGET_REF=''
-	
-	# Cache branch contains checks
-	declare -A branch_contains_cache
-	
-	while IFS='|' read -r HASH REFS MSG AUTHT AUTHU; do
-		if [[ -z "$HASH" ]]; then # ?no log history ⇒ no commits
-			continue
-		fi
-		if [[ -n "$REFS" ]]; then # Clean refs: remove HEAD pointers and tag prefixes using bash string replacement
-			local CLEAN_REFS
-			CLEAN_REFS="${REFS//HEAD -> /}"
-			CLEAN_REFS="${CLEAN_REFS//tag: /}"
-
-			# Check if we hit the target/upstream branch
-			if [[ "$CLEAN_REFS" == *"$DEFAULT_BRANCH"* ]]; then
-				TARGET_HASH="$HASH"
-				# Extract target ref
-				IFS=',' read -ra REFS_ARRAY <<< "$CLEAN_REFS"
-				for ref in "${REFS_ARRAY[@]}"; do
-					ref="${ref#"${ref%%[![:space:]]*}"}"  # trim leading whitespace
-					if [[ "$ref" == "$DEFAULT_BRANCH" ]]; then
-						TARGET_REF="$ref"
-						break 2
-					fi
-				done
-			fi
-
-			# Detect a new local branch label (Stacked branches) using bash array
-			local NEW_GROUP=''
-			IFS=',' read -ra REFS_ARRAY <<< "$CLEAN_REFS"
-			for ref in "${REFS_ARRAY[@]}"; do
-				ref="${ref#"${ref%%[![:space:]]*}"}"  # trim leading whitespace
-				if [[ "$ref" != *"origin/"* && "$ref" != *"gitbutler/"* && "$ref" != "$CURRENT_GROUP" ]]; then
-					NEW_GROUP="$ref"
-					break
-				fi
-				done
-			if [[ -n "$NEW_GROUP" && "$NEW_GROUP" != "$CURRENT_GROUP" ]]; then
-				CURRENT_GROUP="$NEW_GROUP"
-				echo -e "${SEP}│"
-				echo_header 'stacked' "$CURRENT_GROUP"
-			fi
-		fi
-
-		# Cache branch contains check result
-		if [[ -z "${branch_contains_cache[$HASH]:-}" ]]; then
-			if git branch -r --contains "$HASH" 2>/dev/null | grep -q 'origin/'; then
-				branch_contains_cache["$HASH"]='1'
-			else
-				branch_contains_cache["$HASH"]='0'
-			fi
-		fi
-
-		local DOT
-		DOT=$(echo_remote_status "${branch_contains_cache[$HASH]:-}")
-		echo -e "${SEP}$DOT   $(fmt_hash "$HASH") $MSG $(fmt_auth "$AUTHU" "$AUTHT")"
-		
-		# Show commit files if -f flag is provided
-		if [[ "$show_files" == true ]]; then
-			while IFS= read -r line; do
-				if [[ -n "$line" ]]; then
-					local STAT
-					local FILE
-					
-					STAT="${line:0:1}"
-					FILE="${line:2}"
-					
-					[[ -z "$FILE" ]] && continue
-					
-					# Use echo_file_entry function with commit context
-					echo_file_entry "$STAT" "$FILE" 'commit'
-				fi
-			done < <(git show --name-status --format='' "$HASH" 2>/dev/null || echo '')
-		fi
-	done < <(git log --format='%h|%D|%s|%ar|%an' HEAD 2>/dev/null || echo '')
-	
-	# Footer Section 
-	if [[ -z "$TARGET_HASH" ]]; then
-		TARGET_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo '')
-		TARGET_REF='unknown'
-	fi
-	if [[ -z "$TARGET_HASH" ]]; then
-		TARGET_REF='unknown remote'
-		echo -e "├╯\n$SEP"
-		echo -e "┴ $(fmt_label accent "$TARGET_REF")"
-	else
-		local TARGET_DATE=''
-		local TARGET_MSG=''
-		local TARGET_AUTHOR=''
-		# Fetch target commit info in one call if not already cached
-		if [[ -z "$TARGET_DATE" || -z "$TARGET_MSG" ]]; then
-			local target_info
-			target_info=$(git show -s --format='%ar|%an|%s' "$TARGET_HASH" 2>/dev/null || echo '')
-			IFS='|' read -r TARGET_DATE TARGET_AUTHOR TARGET_MSG <<< "$target_info"
-		fi
-		
-		echo -e "├╯\n$SEP"
-		echo -e "┴ $(fmt_hash "$TARGET_HASH") $(fmt_label accent "$TARGET_REF") ${TARGET_MSG} $(fmt_auth "$TARGET_AUTHOR" "$TARGET_DATE")"
-	fi
-	
-	local HINT=''
-	local IN_PROGRESS_OP
-	IN_PROGRESS_OP=$(get_inProgress)
-	if [[ -n "$IN_PROGRESS_OP" ]]; then
-		case "$IN_PROGRESS_OP" in
-			'rebase')      HINT='resolve conflicts, `git add`, then `git rebase --continue`' ;;
-			'merge')       HINT='resolve conflicts, `git add`, then `git commit`' ;;
-			'cherry-pick') HINT='resolve conflicts, `git add`, then `git cherry-pick --continue`' ;;
-			'revert')      HINT='resolve conflicts, `git add`, then `git revert --continue`' ;;
-		esac
-	else
-		if $has_staged; then
-			HINT='run `git commit` to commit staged changes'
-		elif $has_unstaged; then
-			HINT='run `git diff` to see changes, `git add` to stage'
-		elif [[ -z "$TARGET_HASH" ]]; then # ≡ no commits, no remote
-			HINT='run `git add` to stage files (you may also need to set a remote: `git remote add origin <url>`)'
-		fi
-	fi
-	if [[ -n "$HINT" ]]; then
-		echo -e "\n\e[37m${COLOR_NOTE}Hint: ${HINT}${COLOR_RESET}"
-	fi
 }
 
-# --- Execution ---
+main() {
+	local show_files=false
+	process_cliStart show_files "$@"
+	local -r DEFAULT_BRANCH=$(get_defaultBranch)
+	local -A _numstat_cache _staged_files_cache
+	local has_unstaged=false has_staged=false
+	cache_files _numstat_cache _staged_files_cache has_unstaged has_staged
+	
+	component_inProgress
+	component_unstaged "$has_unstaged" "$DEFAULT_BRANCH" _numstat_cache
+	component_stashed "$DEFAULT_BRANCH"
+	component_staged "$has_staged" _staged_files_cache
+	local TARGET_HASH='' TARGET_REF=''
+	component_branches \
+		"$DEFAULT_BRANCH" "$show_files" "${#_staged_files_cache[@]}" \
+		TARGET_HASH TARGET_REF # sideeffect
+	component_branchRoot "$TARGET_HASH" "$TARGET_REF"
+	component_hint "$has_staged" "$has_unstaged" "$TARGET_HASH"
+}
 main "$@"

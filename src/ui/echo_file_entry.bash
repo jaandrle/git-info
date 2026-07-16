@@ -1,5 +1,5 @@
-source ../../core/consts.bash # COLOR_ACCENT, COLOR_KO, COLOR_NOTE, COLOR_OK, COLOR_RESET, COLOR_WARN
-source ../fmt.bash # fmt_hash, fmt_hashes
+source ../core/consts.bash # COLOR_ACCENT, COLOR_KO, COLOR_NOTE, COLOR_OK, COLOR_RESET, COLOR_WARN
+source ./fmt.bash # fmt_hash, fmt_hashes
 echo_file_entry() { # Prints a file entry with consistent formatting
 	local status="$1"
 	local file="$2"
@@ -13,7 +13,6 @@ echo_file_entry() { # Prints a file entry with consistent formatting
 	
 	status_char="${status:0:1}"
 	
-	# Set color based on status
 	case "$status_char" in
 		'M') color="${COLOR_WARN}" ;;
 		'D') color="${COLOR_KO}"    ;;
@@ -21,20 +20,16 @@ echo_file_entry() { # Prints a file entry with consistent formatting
 		*)   color="${COLOR_ACCENT}" ;;
 	esac
 	
-	# Set hash display
 	if [[ -n "$hash" ]]; then
 		if [[ "$hash" == *','* ]]; then
-			# Multiple hashes - use fmt_hashes
 			hash_display="$(fmt_hashes "$hash")"
 		else
-			# Single hash - use fmt_hash
 			hash_display="$(fmt_hash "$hash")"
 		fi
 	else
 		hash_display="${COLOR_NOTE}new file${COLOR_RESET}"
 	fi
 	
-	# Print the formatted file entry
 	if [[ "$context" == 'staged' || "$context" == 'commit' ]]; then
 		printf "${SEP}│   %s ${color}%s${COLOR_RESET}\n" \
 			"$status_char" "$file"

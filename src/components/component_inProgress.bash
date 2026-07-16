@@ -1,5 +1,5 @@
-source ../../core/consts.bash # COLOR_WARN, COLOR_ACCENT, COLOR_RESET
-echoComponent_inProgress() { # Renders rebase/merge/cherry-pick/revert in progress
+source ../core/consts.bash # COLOR_WARN, COLOR_ACCENT, COLOR_RESET
+component_inProgress() { # Renders rebase/merge/cherry-pick/revert in progress
 	local state_dir=''
 	local operation=''
 	local step=''

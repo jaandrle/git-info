@@ -1,4 +1,4 @@
-echo_usage() {
+component_usage() {
 	local usage
 	read -r -d '' usage <<-'USAGE'
 		Git status inspired by GitButler CLI.

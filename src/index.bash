@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # git-info — Jan Andrle
 source ./core/consts.bash
-source ./main.bash
 
-# --- Execution ---
+## Body (`main` function call)
+source ./main.bash
 main "$@"
