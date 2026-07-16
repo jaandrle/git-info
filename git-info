@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# --- Theme Configuration ---
+# git-info — Jan Andrle
+## Theme Configuration
 readonly COLOR_ACCENT='\033[34m'      # Blue
 readonly COLOR_SECTION='\033[32m'     # Green
 readonly COLOR_SECTION_ALT='\033[36m' # Cyan
@@ -11,18 +12,17 @@ readonly COLOR_NOTE='\033[37;2m'      # GRAY
 
 readonly SEP='┊'
 
-# --- Internal ---
+## Internal Constants
 readonly VERSION="1.3.1"
 readonly COLOR_RESET='\033[0m'
 readonly COLOR_DIM='\033[2m'
-
-# --- Functions ---
+## UI parts (formatting)
 fmt_hash() { # formats a 7-char hash with first 4 chars in accent color, last 3 dimmed 
-	local hash="$1"
+	local -r hash="$1"
 	echo -ne "${COLOR_ACCENT}${hash:0:4}${COLOR_DIM}${hash:4:3}${COLOR_RESET}"
 }
 fmt_hashes() { # formats multiple hashes separated by space
-	local hashes="$1"
+	local -r hashes="$1"
 	local result=''
 	local IFS=','
 	for hash in $hashes; do
@@ -34,8 +34,8 @@ fmt_hashes() { # formats multiple hashes separated by space
 	echo -ne "$result"
 }
 fmt_label() {
-	local mode="${1:-accent}" # accent, normal
-	local label="${2:-}"
+	local -r mode="${1:-accent}" # accent, normal
+	local -r label="${2:-}"
 	local color="${COLOR_SECTION}"
 	if [[ "$mode" == 'normal' ]]; then
 		color="${COLOR_SECTION_ALT}"
@@ -44,11 +44,12 @@ fmt_label() {
 		"$label"
 }
 fmt_auth() {
-	local user="$1"
-	local relative="$2"
+	local -r user="$1"
+	local -r relative="$2"
 	printf "$COLOR_NOTE(%s · %s)${COLOR_RESET}" \
 		"$user" "$relative"
 }
+## UI Elements
 echo_usage() {
 	local usage
 	read -r -d '' usage <<-'USAGE'
@@ -89,7 +90,7 @@ echo_header() { # branch/section headers
 	esac
 }
 echo_remote_status() { # Checks remote status for the commit dot 
-	local status="${1:-}" # 1 = on remote, 0 = not on remote
+	local -r status="${1:-}" # 1 = on remote, 0 = not on remote
 	if [[ "$status" == '1' ]]; then
 		echo -e "${COLOR_OK}●${COLOR_RESET}"
 	else
@@ -162,7 +163,7 @@ get_inProgress() { # Detects rebase/merge/cherry-pick/revert in progress and out
 
 	echo "$operation"
 }
-echoSection_inProgress() { # Renders rebase/merge/cherry-pick/revert in progress
+echoComponent_inProgress() { # Renders rebase/merge/cherry-pick/revert in progress
 	local state_dir=''
 	local operation=''
 	local step=''
@@ -270,7 +271,7 @@ fetch_staged() {
 		out["$file"]="$stat"
 	done < <(git diff --cached --name-status 2>/dev/null)
 }
-echoSection_unstaged() {
+echoComponent_unstaged() {
 	echo_header 'unstaged' 'unstaged changes'
 	local -r _has_unstaged="$1"
 	if [[ $_has_unstaged == false ]]; then
@@ -309,7 +310,7 @@ echoSection_unstaged() {
 		echo_file_entry "$UNSTAGED_STAT" "$FILE" 'unstaged' "$LAST_HASH" "$NUMSTAT"
 	done
 }
-echoSection_stashed() {
+echoComponent_stashed() {
 	local -r _default_branch="$1"
 	local stashed_entries
 	stashed_entries=$(git stash list --format='%gd:%gs' 2>/dev/null || echo '')
@@ -365,7 +366,6 @@ echoSection_stashed() {
 		fi
 	done <<< "$stashed_entries"
 }
-
 main() {
 	local opt="${1:-}"
 	if [[ "$opt" == "--version" || "$opt" == "-v" ]]; then
@@ -418,10 +418,10 @@ main() {
 		fi
 	fi
 	
-	echoSection_inProgress
-	echoSection_unstaged "$has_unstaged" "$DEFAULT_BRANCH" numstat_cache
+	echoComponent_inProgress
+	echoComponent_unstaged "$has_unstaged" "$DEFAULT_BRANCH" numstat_cache
 	echo -e "$SEP"
-	echoSection_stashed "$DEFAULT_BRANCH"
+	echoComponent_stashed "$DEFAULT_BRANCH"
 	
 	if [[ $has_staged == true ]]; then
 		echo_header 'staged' 'staged changes'

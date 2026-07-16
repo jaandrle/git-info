@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -eo pipefail # this can be harmful
+
+declare -A INCLUDED
+declare -A STACK
+
+resolve_path() {
+	local current_dir="$1"
+	local file="$2"
+
+	if [[ "$file" = /* ]]; then
+		realpath "$file"
+	else
+		realpath "$current_dir/$file"
+	fi
+}
+
+compile() {
+	local file="$1"
+
+	file="$(realpath "$file")"
+
+	# Prevent duplicate inclusion
+	if [[ -n "${INCLUDED[$file]:-}" ]]; then
+		return
+	fi
+
+	# Detect circular imports
+	if [[ -n "${STACK[$file]:-}" ]]; then
+		echo "Circular dependency detected: $file" >&2
+		exit 1
+	fi
+
+	STACK["$file"]=1
+
+	local dir
+	dir="$(dirname "$file")"
+
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		# Match:
+		# source foo.sh
+		# . foo.sh
+		if [[ "$line" =~ ^[[:space:]]*(source|\.)[[:space:]]+([^[:space:]#]+) ]]; then
+			local include="${BASH_REMATCH[2]}"
+
+			compile "$(resolve_path "$dir" "$include")"
+			continue
+		fi
+
+		echo "$line"
+
+	done < "$file"
+
+	INCLUDED["$file"]=1
+	unset STACK["$file"]
+}
+
+compile src/index.bash > ./git-info
+chmod +x ./git-info
+bs/lint
