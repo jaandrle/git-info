@@ -328,8 +328,12 @@ component_branches() {
 		echo_header 'branch' "$current_group"
 	fi
 	
-	# Cache branch contains checks
-	local -A branch_contains_cache
+	# Pre-compute set of commits reachable from any remote branch (O(1) lookup)
+	local -A on_remote_set
+	while read -r h; do
+		on_remote_set["$h"]=1
+	done < <(git rev-list --remotes --abbrev-commit --abbrev=7 2>/dev/null)
+	
 	local HASH REFS MSG AUTHT AUTHU
 	while IFS='|' read -r HASH REFS MSG AUTHT AUTHU; do
 		if [[ -z "$HASH" ]]; then # ?no log history ⇒ no commits
@@ -371,17 +375,8 @@ component_branches() {
 			fi
 		fi
 
-		# Cache branch contains check result
-		if [[ -z "${branch_contains_cache[$HASH]:-}" ]]; then
-			if git branch -r --contains "$HASH" 2>/dev/null | grep -q 'origin/'; then
-				branch_contains_cache["$HASH"]='1'
-			else
-				branch_contains_cache["$HASH"]='0'
-			fi
-		fi
-
 		local DOT
-		DOT=$(echo_remote_status "${branch_contains_cache[$HASH]:-}")
+		DOT=$(echo_remote_status "${on_remote_set[$HASH]:-0}")
 		echo -e "${SEP}$DOT   $(fmt_hash "$HASH") $MSG $(fmt_auth "$AUTHU" "$AUTHT")"
 		
 		# Show commit files if -f flag is provided
