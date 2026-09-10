@@ -26,6 +26,6 @@ component_hint() {
 		fi
 	fi
 	if [[ -n "$HINT" ]]; then
-		echo -e "\n\e[37m${COLOR_NOTE}Hint: ${HINT}${COLOR_RESET}"
+		echo -e "\n${COLOR_NOTE}Hint: ${HINT}${COLOR_RESET}"
 	fi
 }
