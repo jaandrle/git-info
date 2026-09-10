@@ -16,6 +16,7 @@ echo_file_entry() { # Prints a file entry with consistent formatting
 	case "$status_char" in
 		'M') color="${COLOR_WARN}" ;;
 		'D') color="${COLOR_KO}"    ;;
+		'U') color="${COLOR_KO}"    ;;
 		'A') color="${COLOR_OK}"    ;;
 		*)   color="${COLOR_ACCENT}" ;;
 	esac

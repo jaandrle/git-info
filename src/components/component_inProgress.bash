@@ -1,42 +1,30 @@
 source ../core/consts.bash # COLOR_WARN, COLOR_ACCENT, COLOR_RESET
+source ../core/get_inProgress.bash
+
 component_inProgress() { # Renders rebase/merge/cherry-pick/revert in progress
-	local state_dir=''
 	local operation=''
 	local step=''
 	local total=''
 
-	if [[ -d .git/rebase-merge ]]; then
-		state_dir='.git/rebase-merge'
-		if [[ -f "$state_dir/interactive" ]]; then
-			operation='rebase -i'
-		else
-			operation='rebase'
-		fi
-		step=$(cat "$state_dir/msgnum" 2>/dev/null || echo '1')
-		total=$(cat "$state_dir/end" 2>/dev/null || echo '?')
-	elif [[ -d .git/rebase-apply ]]; then
-		state_dir='.git/rebase-apply'
-		operation='rebase'
-		step=$(cat "$state_dir/next" 2>/dev/null || echo '1')
-		total=$(cat "$state_dir/last" 2>/dev/null || echo '?' )
-	elif [[ -f .git/MERGE_HEAD ]]; then
-		operation='merge'
-		step=''
-		total=''
-	elif [[ -f .git/CHERRY_PICK_HEAD ]]; then
-		operation='cherry-pick'
-		step=''
-		total=''
-	elif [[ -f .git/REVERT_HEAD ]]; then
-		operation='revert'
-		step=''
-		total=''
-	fi
+	operation=$(get_inProgress)
 
 	if [[ -z "$operation" ]]; then
 		return 0
 	fi
-	
+
+	# Get step/total for rebase operations
+	if [[ -d .git/rebase-merge ]]; then
+		step=$(cat .git/rebase-merge/msgnum 2>/dev/null || echo '1')
+		total=$(cat .git/rebase-merge/end 2>/dev/null || echo '?')
+		# Override operation to show "rebase -i" for interactive
+		if [[ -f .git/rebase-merge/interactive ]]; then
+			operation='rebase -i'
+		fi
+	elif [[ -d .git/rebase-apply ]]; then
+		step=$(cat .git/rebase-apply/next 2>/dev/null || echo '1')
+		total=$(cat .git/rebase-apply/last 2>/dev/null || echo '?')
+	fi
+
 	local color="${COLOR_WARN}"
 	if [[ "$operation" == 'merge' ]]; then
 		color="${COLOR_ACCENT}"
