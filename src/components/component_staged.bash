@@ -7,9 +7,9 @@ component_staged(){
 	fi
 	local -n __staged_files_cache=$2
 	echo_header 'staged' 'staged changes'
-	for file in "${!__staged_files_cache[@]}"; do
+	while IFS= read -r file; do
 		local STAT="${__staged_files_cache[$file]:0:1}"
 		echo_file_entry "$STAT" "$file" 'staged'
-	done
+	done < <(printf '%s\n' "${!__staged_files_cache[@]}" | sort)
 	echo -e "${SEP}│"
 }
