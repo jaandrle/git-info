@@ -177,6 +177,14 @@ fetch_numstat() {
 		# shellcheck disable=SC2034
 		out["$file"]="${additions}+${deletions}-"
 	done < <(git diff --numstat 2>/dev/null)
+	# new files
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		local file=''
+		read -r file <<< "$line"
+		[[ -z "$file" ]] && continue
+		# shellcheck disable=SC2034
+		out["$file"]=""
+	done < <(git ls-files --others --exclude-standard 2>/dev/null)
 }
 fetch_staged() {
 	# shellcheck disable=SC2178
@@ -595,15 +603,13 @@ component_unstaged() {
 		if [[ "$STAT" == '?' || "$STAT" == 'A' || "$UNSTAGED_STAT" == '?' || "$UNSTAGED_STAT" == 'A' ]]; then
 			LAST_HASH=''
 			UNSTAGED_STAT='A'
-			NUMSTAT=''
 		else
 			# Fetch and format all hashes that touched this file, limited to DEFAULT_BRANCH
 			local RAW_HASHES
 			RAW_HASHES=$(git log --format='%h' "$_default_branch"..HEAD -- "$FILE" 2>/dev/null | join_lines)
 			LAST_HASH="$RAW_HASHES"
-			# Get numstat from cache
-			NUMSTAT=${__numstat_cache["$FILE"]:-}
 		fi
+		NUMSTAT=${__numstat_cache["$FILE"]:-}
 
 		echo_file_entry "$UNSTAGED_STAT" "$FILE" 'unstaged' "$LAST_HASH" "$NUMSTAT"
 	done

@@ -24,15 +24,13 @@ component_unstaged() {
 		if [[ "$STAT" == '?' || "$STAT" == 'A' || "$UNSTAGED_STAT" == '?' || "$UNSTAGED_STAT" == 'A' ]]; then
 			LAST_HASH=''
 			UNSTAGED_STAT='A'
-			NUMSTAT=''
 		else
 			# Fetch and format all hashes that touched this file, limited to DEFAULT_BRANCH
 			local RAW_HASHES
 			RAW_HASHES=$(git log --format='%h' "$_default_branch"..HEAD -- "$FILE" 2>/dev/null | join_lines)
 			LAST_HASH="$RAW_HASHES"
-			# Get numstat from cache
-			NUMSTAT=${__numstat_cache["$FILE"]:-}
 		fi
+		NUMSTAT=${__numstat_cache["$FILE"]:-}
 
 		echo_file_entry "$UNSTAGED_STAT" "$FILE" 'unstaged' "$LAST_HASH" "$NUMSTAT"
 	done
