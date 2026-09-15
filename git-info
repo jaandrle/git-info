@@ -292,15 +292,20 @@ echo_file_entry() { # Prints a file entry with consistent formatting
 		else
 			hash_display="$(fmt_hash "$hash")"
 		fi
-	else
+	elif [[ "$status_char" == 'A' ]]; then
 		hash_display="${COLOR_NOTE}new file${COLOR_RESET}"
+	fi
+	if [[ '' != "$hash_display" ]]; then
+		hash_display="…${COLOR_RESET} ${hash_display}"
+	else
+		hash_display="${COLOR_RESET}"
 	fi
 	
 	if [[ "$context" == 'staged' || "$context" == 'commit' ]]; then
 		printf "${SEP}│   %s ${color}%s${COLOR_RESET}\n" \
 			"$status_char" "$file"
 	else
-		printf "${SEP}    %s ${color}%s${COLOR_RESET} ${COLOR_NOTE}%s …${COLOR_RESET} %b\n" \
+		printf "${SEP}    %s ${color}%s${COLOR_RESET} ${COLOR_NOTE}%s %b\n" \
 			"$status_char" "$file" "$numstat" "$hash_display"
 	fi
 }
@@ -604,10 +609,7 @@ component_unstaged() {
 			LAST_HASH=''
 			UNSTAGED_STAT='A'
 		else
-			# Fetch and format all hashes that touched this file, limited to DEFAULT_BRANCH
-			local RAW_HASHES
-			RAW_HASHES=$(git log --format='%h' "$_default_branch"..HEAD -- "$FILE" 2>/dev/null | join_lines)
-			LAST_HASH="$RAW_HASHES"
+			LAST_HASH=$(git log --format='%h' "$_default_branch"..HEAD -- "$FILE" 2>/dev/null | join_lines)
 		fi
 		NUMSTAT=${__numstat_cache["$FILE"]:-}
 

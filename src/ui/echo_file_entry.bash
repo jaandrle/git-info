@@ -27,15 +27,20 @@ echo_file_entry() { # Prints a file entry with consistent formatting
 		else
 			hash_display="$(fmt_hash "$hash")"
 		fi
-	else
+	elif [[ "$status_char" == 'A' ]]; then
 		hash_display="${COLOR_NOTE}new file${COLOR_RESET}"
+	fi
+	if [[ '' != "$hash_display" ]]; then
+		hash_display="…${COLOR_RESET} ${hash_display}"
+	else
+		hash_display="${COLOR_RESET}"
 	fi
 	
 	if [[ "$context" == 'staged' || "$context" == 'commit' ]]; then
 		printf "${SEP}│   %s ${color}%s${COLOR_RESET}\n" \
 			"$status_char" "$file"
 	else
-		printf "${SEP}    %s ${color}%s${COLOR_RESET} ${COLOR_NOTE}%s …${COLOR_RESET} %b\n" \
+		printf "${SEP}    %s ${color}%s${COLOR_RESET} ${COLOR_NOTE}%s %b\n" \
 			"$status_char" "$file" "$numstat" "$hash_display"
 	fi
 }
