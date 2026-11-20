@@ -23,7 +23,7 @@ component_usage() {
 		  ! operation      In-progress Git operation
 		  M/A/D            File status (Modified/Added/Deleted)
 		  ┴ hash [branch]  Footer with target branch info
-		  Hint:            Contextual hint
+		  Next:            Suggested next action (contextual)
 	USAGE
 	echo "$usage"
 }
