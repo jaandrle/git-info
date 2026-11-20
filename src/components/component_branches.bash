@@ -9,6 +9,31 @@ component_branches() {
 	local -r staged_files_count=$3
 	local -n _target_hash=$4
 	local -n _target_ref=$5
+	local -r MAX_COMMITS=15
+	local -r MAX_MONTHS=3
+	local -A MONTH_COUNTS=()
+	local -a MONTH_ORDER=()
+	local group_count=0
+	
+	# Prints and resets the collapsed month summary for the current group
+	_flushMonths() {
+		local month shown=0 older_count=0
+		for month in "${MONTH_ORDER[@]}"; do
+			if (( shown < MAX_MONTHS )); then
+				echo -e "${SEP}┊   ${COLOR_NOTE}$month · ${MONTH_COUNTS[$month]} commits${COLOR_RESET}"
+				(( shown++ ))
+			else
+				(( older_count += ${MONTH_COUNTS[$month]} ))
+			fi
+		done
+		if (( older_count > 0 )); then
+			echo -e "${SEP}┊   ${COLOR_NOTE}older   · $older_count commits${COLOR_RESET}"
+		fi
+		MONTH_COUNTS=()
+		MONTH_ORDER=()
+		group_count=0
+		return 0
+	}
 	# Dynamic Commit Groups
 	local current_group
 	current_group=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')
@@ -18,10 +43,14 @@ component_branches() {
 		echo_header 'branch' "$current_group"
 	fi
 	
-	# Cache branch contains checks
-	local -A branch_contains_cache
-	local HASH REFS MSG AUTHT AUTHU
-	while IFS='|' read -r HASH REFS MSG AUTHT AUTHU; do
+	# Pre-compute set of commits reachable from any remote branch (O(1) lookup)
+	local -A on_remote_set
+	while read -r h; do
+		on_remote_set["$h"]=1
+	done < <(git rev-list --remotes --abbrev-commit --abbrev=7 2>/dev/null)
+	
+	local HASH REFS MSG AUTHT AUTHU DATEYM
+	while IFS='|' read -r HASH REFS MSG AUTHT AUTHU DATEYM; do
 		if [[ -z "$HASH" ]]; then # ?no log history ⇒ no commits
 			continue
 		fi
@@ -39,6 +68,7 @@ component_branches() {
 					ref="${ref#"${ref%%[![:space:]]*}"}"  # trim leading whitespace
 					if [[ "$ref" == "$DEFAULT_BRANCH" ]]; then
 						_target_ref="$ref"
+						_flushMonths
 						break 2
 					fi
 				done
@@ -55,23 +85,25 @@ component_branches() {
 				fi
 				done
 			if [[ -n "$NEW_GROUP" && "$NEW_GROUP" != "$current_group" ]]; then
+				_flushMonths
 				current_group="$NEW_GROUP"
 				echo -e "${SEP}│"
 				echo_header 'stacked' "$current_group"
 			fi
 		fi
 
-		# Cache branch contains check result
-		if [[ -z "${branch_contains_cache[$HASH]:-}" ]]; then
-			if git branch -r --contains "$HASH" 2>/dev/null | grep -q 'origin/'; then
-				branch_contains_cache["$HASH"]='1'
-			else
-				branch_contains_cache["$HASH"]='0'
+		# Collapse commits beyond the limit into per-month buckets
+		if (( group_count >= MAX_COMMITS )); then
+			if [[ -z "${MONTH_COUNTS[$DATEYM]+x}" ]]; then
+				MONTH_ORDER+=("$DATEYM")
 			fi
+			(( MONTH_COUNTS[$DATEYM]++ ))
+			continue
 		fi
+		(( group_count++ ))
 
 		local DOT
-		DOT=$(echo_remote_status "${branch_contains_cache[$HASH]:-}")
+		DOT=$(echo_remote_status "${on_remote_set[$HASH]:-0}")
 		echo -e "${SEP}$DOT   $(fmt_hash "$HASH") $MSG $(fmt_auth "$AUTHU" "$AUTHT")"
 		
 		# Show commit files if -f flag is provided
@@ -91,5 +123,5 @@ component_branches() {
 				fi
 			done < <(git show --name-status --format='' "$HASH" 2>/dev/null || echo '')
 		fi
-	done < <(git log --format='%h|%D|%s|%ar|%an' HEAD 2>/dev/null || echo '')
+	done < <(git log --date=format:'%Y-%m' --format='%h|%D|%s|%ar|%an|%ad' HEAD 2>/dev/null || echo '')
 }

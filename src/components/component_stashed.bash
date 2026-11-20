@@ -1,5 +1,12 @@
 source ../core/consts.bash # COLOR_RESET, COLOR_STRONG, COLOR_SECTION, COLOR_SECTION_ALT, SEP
+source ../core/join_lines.bash
 source ../ui/echo_file_entry.bash
+
+_format_numstat() {
+	local added deleted
+	read -r added deleted _ || return
+	printf '%s+%s-' "$added" "$deleted"
+}
 component_stashed() {
 	local -r _default_branch="$1"
 	local stashed_entries
@@ -43,10 +50,10 @@ component_stashed() {
 							else
 								# Fetch and format the last hash to touch this file 
 								local RAW_HASHES
-								RAW_HASHES=$(git log --format='%h' "$_default_branch".."$stash_index" -- "$FILE" 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+								RAW_HASHES=$(git log --format='%h' "$_default_branch".."$stash_index" -- "$FILE" 2>/dev/null | join_lines)
 								LAST_HASH="$RAW_HASHES"
 								# Get numstat for this file
-								NUMSTAT=$(git diff --numstat "$stash_index^..$stash_index" -- "$FILE" 2>/dev/null | awk '{print $1"+"$2"-"}' || echo '')
+								NUMSTAT=$(git diff --numstat "$stash_index^..$stash_index" -- "$FILE" 2>/dev/null | _format_numstat || echo '')
 							fi
 							
 							echo_file_entry "$STAT" "$FILE" 'stashed' "$LAST_HASH" "$NUMSTAT"

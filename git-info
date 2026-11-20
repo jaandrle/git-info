@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 # git-info — Jan Andrle
 ## Theme Configuration
-readonly COLOR_ACCENT='\033[34m'      # Blue
-readonly COLOR_SECTION='\033[32m'     # Green
-readonly COLOR_SECTION_ALT='\033[36m' # Cyan
-readonly COLOR_STRONG='\033[1m'       # Bold
-readonly COLOR_OK='\033[32m'          # Green
-readonly COLOR_WARN='\033[33m'        # Orange
-readonly COLOR_KO='\033[31m'          # Red
-readonly COLOR_NOTE='\033[37;2m'      # GRAY
+declare COLOR_ACCENT='\033[34m'      # Blue
+declare COLOR_SECTION='\033[32m'     # Green
+declare COLOR_SECTION_ALT='\033[36m' # Cyan
+declare COLOR_STRONG='\033[1m'       # Bold
+declare COLOR_OK='\033[32m'          # Green
+declare COLOR_WARN='\033[33m'        # Orange
+declare COLOR_KO='\033[31m'          # Red
+declare COLOR_NOTE='\033[37;2m'      # GRAY
 
 readonly SEP='┊'
 
 ## Internal Constants
 readonly VERSION="1.4.0"
-readonly COLOR_RESET='\033[0m'
-readonly COLOR_DIM='\033[2m'
+declare COLOR_RESET='\033[0m'
+declare COLOR_DIM='\033[2m'
 
 ## Body (`main` function call)
 get_defaultBranch() { # Detects the default branch from remote
@@ -82,36 +82,88 @@ component_usage() {
 		  ! operation      In-progress Git operation
 		  M/A/D            File status (Modified/Added/Deleted)
 		  ┴ hash [branch]  Footer with target branch info
-		  Hint:            Contextual hint
+		  Next:            Suggested next action (contextual)
 	USAGE
 	echo "$usage"
 }
-process_cliStart(){
+process_cliStart() {
 	local -n _show_files=$1
 	shift
-	local opt="${1:-}"
-	if [[ "$opt" == "--version" || "$opt" == "-v" ]]; then
-		echo "$VERSION"
-		exit 0
+
+	local colors=true
+
+	# Colors only when stdout is a terminal.
+	if [[ ! -t 1 ]]; then
+		colors=false
 	fi
-	if [[ "$opt" == "help" || "$opt" == "--help" || "$opt" == "-h" ]]; then
-		component_usage
-		exit 0
-	fi
-	is_gitRepo
-	# Parse flags
-	while getopts "f" opt; do
-		case $opt in
-			f)
+
+	while (($#)); do
+		case "$1" in
+			-f)
 				_show_files=true
 				;;
-			?)
-				[[ -n "$OPTARG" ]] && \
-					echo "Invalid option: -${OPTARG}." >&2
+
+			-c|--color|--colors)
+				colors=true
+				;;
+
+			-fc|-cf)
+				_show_files=true
+				colors=true
+				;;
+
+			-v|--version)
+				echo "$VERSION"
+				exit 0
+				;;
+
+			-h|--help|help)
+				component_usage
+				exit 0
+				;;
+
+			--)
+				shift
+				break
+				;;
+
+			-*)
+				echo "Invalid option: $1." >&2
+				echo "Try '$0 --help' for usage." >&2
+				exit 1
+				;;
+
+			*)
+				echo "Unexpected argument: $1." >&2
+				echo "Try '$0 --help' for usage." >&2
 				exit 1
 				;;
 		esac
+
+		shift
 	done
+
+	# Reject positional arguments unless you intend to support them.
+	if (($#)); then
+		echo "Unexpected argument: $1." >&2
+		echo "Try '$0 --help' for usage." >&2
+		exit 1
+	fi
+
+	is_gitRepo
+
+	if [[ "$colors" == false ]]; then
+		COLOR_ACCENT=''
+		COLOR_SECTION=''
+		COLOR_SECTION_ALT=''
+		COLOR_STRONG=''
+		COLOR_OK=''
+		COLOR_WARN=''
+		COLOR_KO=''
+		COLOR_NOTE=''
+		COLOR_RESET=''
+		COLOR_DIM=''
+	fi
 }
 fetch_numstat() {
 	# shellcheck disable=SC2178
@@ -125,6 +177,14 @@ fetch_numstat() {
 		# shellcheck disable=SC2034
 		out["$file"]="${additions}+${deletions}-"
 	done < <(git diff --numstat 2>/dev/null)
+	# new files
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		local file=''
+		read -r file <<< "$line"
+		[[ -z "$file" ]] && continue
+		# shellcheck disable=SC2034
+		out["$file"]=""
+	done < <(git ls-files --others --exclude-standard 2>/dev/null)
 }
 fetch_staged() {
 	# shellcheck disable=SC2178
@@ -138,27 +198,12 @@ fetch_staged() {
 	done < <(git diff --cached --name-status 2>/dev/null)
 }
 cache_files() {
-	local -n __numstat_cache=$1
-	fetch_numstat "$1"
-	local -n __staged_files_cache=$2
-	fetch_staged "$2"
+	local -n __numstat_cache=$1;      fetch_numstat "$1"
+	local -n __staged_files_cache=$2; fetch_staged "$2"
 	local -n _has_unstaged=$3
 	local -n _has_staged=$4
-	if [[ -n "${_numstat_cache:+x}" || -n "${__staged_files_cache:+x}" ]]; then
-		if [[ ${#_numstat_cache[@]} -gt 0 ]]; then
-			_has_unstaged=true
-		fi
-		if [[ ${#__staged_files_cache[@]} -gt 0 ]]; then
-			_has_staged=true
-		fi
-	else
-		if git status --short --no-branch 2>/dev/null | grep -q .; then
-			_has_unstaged=true
-		fi
-		if git diff --cached --name-status 2>/dev/null | grep -q .; then
-			_has_staged=true
-		fi
-	fi
+	(( ${#__numstat_cache[@]} > 0 ))      && _has_unstaged=true
+	(( ${#__staged_files_cache[@]} > 0 )) && _has_staged=true
 }
 fmt_hash() { # formats a 7-char hash with first 4 chars in accent color, last 3 dimmed 
 	local -r hash="$1"
@@ -236,6 +281,7 @@ echo_file_entry() { # Prints a file entry with consistent formatting
 	case "$status_char" in
 		'M') color="${COLOR_WARN}" ;;
 		'D') color="${COLOR_KO}"    ;;
+		'U') color="${COLOR_KO}"    ;;
 		'A') color="${COLOR_OK}"    ;;
 		*)   color="${COLOR_ACCENT}" ;;
 	esac
@@ -246,15 +292,20 @@ echo_file_entry() { # Prints a file entry with consistent formatting
 		else
 			hash_display="$(fmt_hash "$hash")"
 		fi
-	else
+	elif [[ "$status_char" == 'A' ]]; then
 		hash_display="${COLOR_NOTE}new file${COLOR_RESET}"
+	fi
+	if [[ '' != "$hash_display" ]]; then
+		hash_display="…${COLOR_RESET} ${hash_display}"
+	else
+		hash_display="${COLOR_RESET}"
 	fi
 	
 	if [[ "$context" == 'staged' || "$context" == 'commit' ]]; then
 		printf "${SEP}│   %s ${color}%s${COLOR_RESET}\n" \
 			"$status_char" "$file"
 	else
-		printf "${SEP}    %s ${color}%s${COLOR_RESET} ${COLOR_NOTE}%s …${COLOR_RESET} %b\n" \
+		printf "${SEP}    %s ${color}%s${COLOR_RESET} ${COLOR_NOTE}%s %b\n" \
 			"$status_char" "$file" "$numstat" "$hash_display"
 	fi
 }
@@ -282,6 +333,31 @@ component_branches() {
 	local -r staged_files_count=$3
 	local -n _target_hash=$4
 	local -n _target_ref=$5
+	local -r MAX_COMMITS=15
+	local -r MAX_MONTHS=3
+	local -A MONTH_COUNTS=()
+	local -a MONTH_ORDER=()
+	local group_count=0
+	
+	# Prints and resets the collapsed month summary for the current group
+	_flushMonths() {
+		local month shown=0 older_count=0
+		for month in "${MONTH_ORDER[@]}"; do
+			if (( shown < MAX_MONTHS )); then
+				echo -e "${SEP}┊   ${COLOR_NOTE}$month · ${MONTH_COUNTS[$month]} commits${COLOR_RESET}"
+				(( shown++ ))
+			else
+				(( older_count += ${MONTH_COUNTS[$month]} ))
+			fi
+		done
+		if (( older_count > 0 )); then
+			echo -e "${SEP}┊   ${COLOR_NOTE}older   · $older_count commits${COLOR_RESET}"
+		fi
+		MONTH_COUNTS=()
+		MONTH_ORDER=()
+		group_count=0
+		return 0
+	}
 	# Dynamic Commit Groups
 	local current_group
 	current_group=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')
@@ -291,10 +367,14 @@ component_branches() {
 		echo_header 'branch' "$current_group"
 	fi
 	
-	# Cache branch contains checks
-	local -A branch_contains_cache
-	local HASH REFS MSG AUTHT AUTHU
-	while IFS='|' read -r HASH REFS MSG AUTHT AUTHU; do
+	# Pre-compute set of commits reachable from any remote branch (O(1) lookup)
+	local -A on_remote_set
+	while read -r h; do
+		on_remote_set["$h"]=1
+	done < <(git rev-list --remotes --abbrev-commit --abbrev=7 2>/dev/null)
+	
+	local HASH REFS MSG AUTHT AUTHU DATEYM
+	while IFS='|' read -r HASH REFS MSG AUTHT AUTHU DATEYM; do
 		if [[ -z "$HASH" ]]; then # ?no log history ⇒ no commits
 			continue
 		fi
@@ -312,6 +392,7 @@ component_branches() {
 					ref="${ref#"${ref%%[![:space:]]*}"}"  # trim leading whitespace
 					if [[ "$ref" == "$DEFAULT_BRANCH" ]]; then
 						_target_ref="$ref"
+						_flushMonths
 						break 2
 					fi
 				done
@@ -328,23 +409,25 @@ component_branches() {
 				fi
 				done
 			if [[ -n "$NEW_GROUP" && "$NEW_GROUP" != "$current_group" ]]; then
+				_flushMonths
 				current_group="$NEW_GROUP"
 				echo -e "${SEP}│"
 				echo_header 'stacked' "$current_group"
 			fi
 		fi
 
-		# Cache branch contains check result
-		if [[ -z "${branch_contains_cache[$HASH]:-}" ]]; then
-			if git branch -r --contains "$HASH" 2>/dev/null | grep -q 'origin/'; then
-				branch_contains_cache["$HASH"]='1'
-			else
-				branch_contains_cache["$HASH"]='0'
+		# Collapse commits beyond the limit into per-month buckets
+		if (( group_count >= MAX_COMMITS )); then
+			if [[ -z "${MONTH_COUNTS[$DATEYM]+x}" ]]; then
+				MONTH_ORDER+=("$DATEYM")
 			fi
+			(( MONTH_COUNTS[$DATEYM]++ ))
+			continue
 		fi
+		(( group_count++ ))
 
 		local DOT
-		DOT=$(echo_remote_status "${branch_contains_cache[$HASH]:-}")
+		DOT=$(echo_remote_status "${on_remote_set[$HASH]:-0}")
 		echo -e "${SEP}$DOT   $(fmt_hash "$HASH") $MSG $(fmt_auth "$AUTHU" "$AUTHT")"
 		
 		# Show commit files if -f flag is provided
@@ -364,7 +447,7 @@ component_branches() {
 				fi
 			done < <(git show --name-status --format='' "$HASH" 2>/dev/null || echo '')
 		fi
-	done < <(git log --format='%h|%D|%s|%ar|%an' HEAD 2>/dev/null || echo '')
+	done < <(git log --date=format:'%Y-%m' --format='%h|%D|%s|%ar|%an|%ad' HEAD 2>/dev/null || echo '')
 }
 get_inProgress() { # Detects rebase/merge/cherry-pick/revert in progress and outputs operation type
 	local state_dir=''
@@ -393,69 +476,55 @@ component_hint() {
 	local -r has_staged="$1"
 	local -r has_unstaged="$2"
 	local -r TARGET_HASH="$3"
-	local HINT=''
+	local HINT='' COLOR="${COLOR_ACCENT}"
 	local IN_PROGRESS_OP
 	IN_PROGRESS_OP=$(get_inProgress)
 	if [[ -n "$IN_PROGRESS_OP" ]]; then
+		COLOR="${COLOR_WARN}"
+		local CONTINUE="git $IN_PROGRESS_OP --continue"
 		# shellcheck disable=SC2016
-		case "$IN_PROGRESS_OP" in
-			'rebase')      HINT='resolve conflicts, `git add`, then `git rebase --continue`' ;;
-			'merge')       HINT='resolve conflicts, `git add`, then `git commit`' ;;
-			'cherry-pick') HINT='resolve conflicts, `git add`, then `git cherry-pick --continue`' ;;
-			'revert')      HINT='resolve conflicts, `git add`, then `git revert --continue`' ;;
-		esac
+		HINT='resolve conflicts → `git add` → `'"$CONTINUE"'`'
 	else
 		# shellcheck disable=SC2016
 		if $has_staged; then
-			HINT='run `git commit` to commit staged changes'
+			HINT='commit staged changes → `git commit`'
 		elif $has_unstaged; then
-			HINT='run `git diff` to see changes, `git add` to stage'
+			HINT='review changes → `git diff` · stage files → `git add`'
 		elif [[ -z "$TARGET_HASH" ]]; then # ≡ no commits, no remote
-			HINT='run `git add` to stage files (you may also need to set a remote: `git remote add origin <url>`)'
+			HINT='stage files → `git add` · add remote → `git remote add origin <url>`'
 		fi
 	fi
 	if [[ -n "$HINT" ]]; then
-		echo -e "\n\e[37m${COLOR_NOTE}Hint: ${HINT}${COLOR_RESET}"
+		# Dim the action separators (`→`) to keep commands prominent
+		HINT="${HINT//→/${COLOR_DIM}→${COLOR_RESET}}"
+		echo -e "\n${COLOR_STRONG}${COLOR}Next:${COLOR_RESET} ${HINT}${COLOR_RESET}"
 	fi
 }
+
 component_inProgress() { # Renders rebase/merge/cherry-pick/revert in progress
-	local state_dir=''
 	local operation=''
 	local step=''
 	local total=''
 
-	if [[ -d .git/rebase-merge ]]; then
-		state_dir='.git/rebase-merge'
-		if [[ -f "$state_dir/interactive" ]]; then
-			operation='rebase -i'
-		else
-			operation='rebase'
-		fi
-		step=$(cat "$state_dir/msgnum" 2>/dev/null || echo '1')
-		total=$(cat "$state_dir/end" 2>/dev/null || echo '?')
-	elif [[ -d .git/rebase-apply ]]; then
-		state_dir='.git/rebase-apply'
-		operation='rebase'
-		step=$(cat "$state_dir/next" 2>/dev/null || echo '1')
-		total=$(cat "$state_dir/last" 2>/dev/null || echo '?' )
-	elif [[ -f .git/MERGE_HEAD ]]; then
-		operation='merge'
-		step=''
-		total=''
-	elif [[ -f .git/CHERRY_PICK_HEAD ]]; then
-		operation='cherry-pick'
-		step=''
-		total=''
-	elif [[ -f .git/REVERT_HEAD ]]; then
-		operation='revert'
-		step=''
-		total=''
-	fi
+	operation=$(get_inProgress)
 
 	if [[ -z "$operation" ]]; then
 		return 0
 	fi
-	
+
+	# Get step/total for rebase operations
+	if [[ -d .git/rebase-merge ]]; then
+		step=$(cat .git/rebase-merge/msgnum 2>/dev/null || echo '1')
+		total=$(cat .git/rebase-merge/end 2>/dev/null || echo '?')
+		# Override operation to show "rebase -i" for interactive
+		if [[ -f .git/rebase-merge/interactive ]]; then
+			operation='rebase -i'
+		fi
+	elif [[ -d .git/rebase-apply ]]; then
+		step=$(cat .git/rebase-apply/next 2>/dev/null || echo '1')
+		total=$(cat .git/rebase-apply/last 2>/dev/null || echo '?')
+	fi
+
 	local color="${COLOR_WARN}"
 	if [[ "$operation" == 'merge' ]]; then
 		color="${COLOR_ACCENT}"
@@ -474,11 +543,28 @@ component_staged(){
 	fi
 	local -n __staged_files_cache=$2
 	echo_header 'staged' 'staged changes'
-	for file in "${!__staged_files_cache[@]}"; do
+	while IFS= read -r file; do
 		local STAT="${__staged_files_cache[$file]:0:1}"
 		echo_file_entry "$STAT" "$file" 'staged'
-	done
+	done < <(printf '%s\n' "${!__staged_files_cache[@]}" | sort)
 	echo -e "${SEP}│"
+}
+join_lines() {
+	local first=1 line
+	while IFS= read -r line; do
+		if (( first )); then
+			first=0
+		else
+			printf ','
+		fi
+		printf '%s' "$line"
+	done
+}
+
+_format_numstat() {
+	local added deleted
+	read -r added deleted _ || return
+	printf '%s+%s-' "$added" "$deleted"
 }
 component_stashed() {
 	local -r _default_branch="$1"
@@ -523,10 +609,10 @@ component_stashed() {
 							else
 								# Fetch and format the last hash to touch this file 
 								local RAW_HASHES
-								RAW_HASHES=$(git log --format='%h' "$_default_branch".."$stash_index" -- "$FILE" 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+								RAW_HASHES=$(git log --format='%h' "$_default_branch".."$stash_index" -- "$FILE" 2>/dev/null | join_lines)
 								LAST_HASH="$RAW_HASHES"
 								# Get numstat for this file
-								NUMSTAT=$(git diff --numstat "$stash_index^..$stash_index" -- "$FILE" 2>/dev/null | awk '{print $1"+"$2"-"}' || echo '')
+								NUMSTAT=$(git diff --numstat "$stash_index^..$stash_index" -- "$FILE" 2>/dev/null | _format_numstat || echo '')
 							fi
 							
 							echo_file_entry "$STAT" "$FILE" 'stashed' "$LAST_HASH" "$NUMSTAT"
@@ -558,15 +644,10 @@ component_unstaged() {
 		if [[ "$STAT" == '?' || "$STAT" == 'A' || "$UNSTAGED_STAT" == '?' || "$UNSTAGED_STAT" == 'A' ]]; then
 			LAST_HASH=''
 			UNSTAGED_STAT='A'
-			NUMSTAT=''
 		else
-			# Fetch and format all hashes that touched this file, limited to DEFAULT_BRANCH
-			local RAW_HASHES
-			RAW_HASHES=$(git log --format='%h' "$_default_branch"..HEAD -- "$FILE" 2>/dev/null | tr '\n' ',' | sed 's/,$//')
-			LAST_HASH="$RAW_HASHES"
-			# Get numstat from cache
-			NUMSTAT=${__numstat_cache["$FILE"]:-}
+			LAST_HASH=$(git log --format='%h' "$_default_branch"..HEAD -- "$FILE" 2>/dev/null | join_lines)
 		fi
+		NUMSTAT=${__numstat_cache["$FILE"]:-}
 
 		echo_file_entry "$UNSTAGED_STAT" "$FILE" 'unstaged' "$LAST_HASH" "$NUMSTAT"
 	done

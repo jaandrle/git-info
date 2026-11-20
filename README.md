@@ -18,7 +18,7 @@
 ┊
 ┴ 6089a06 [default-branch] 2026-03-20 :zap: Improves UI staged+branch
 
-Hint: run `git diff` to see changes, `git add` to stage
+Next: review changes → `git diff` · stage files → `git add`
 ```
 
 # git-info
@@ -45,7 +45,7 @@ history, and branch information.
 - **`! operation`**: In-progress Git operation
 - **`M/A/D`**: File status (Modified/Added/Deleted)
 - **`┴ hash [branch]`**: Footer with target branch info
-- **`Hint:`**: Contextual hint
+- **`Next:`**: Suggested next action (contextual)
 
 ## Installation
 
